@@ -128,12 +128,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
         }
       }
 
-      if (roleAssignments.length === 1) {
-        const onlyRole = roleAssignments[0]
-        return { clientId: onlyRole.clientId, role: onlyRole.role }
-      }
-
-      return null
+      const defaultRole = roleAssignments[0]
+      return { clientId: defaultRole.clientId, role: defaultRole.role }
     },
     [],
   )
@@ -238,9 +234,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setRoles(roleAssignments)
 
       if (!activeContext) {
-        if (roleAssignments.length === 1) {
-          const onlyRole = roleAssignments[0]
-          const nextContext = { clientId: onlyRole.clientId, role: onlyRole.role }
+        if (roleAssignments.length > 0) {
+          const nextContext = { clientId: roleAssignments[0].clientId, role: roleAssignments[0].role }
           setActiveContext(nextContext)
           persistContext(user.id, nextContext)
         }
@@ -254,19 +249,42 @@ export function AuthProvider({ children }: AuthProviderProps) {
       )
 
       if (!stillValid) {
-        setActiveContext(null)
-        persistContext(user.id, null)
+        const nextContext = roleAssignments[0]
+          ? { clientId: roleAssignments[0].clientId, role: roleAssignments[0].role }
+          : null
+
+        setActiveContext(nextContext)
+        persistContext(user.id, nextContext)
       }
     } catch (error) {
       toast.error(toHumanErrorMessage(error, 'Unable to refresh role assignments.'))
     }
   }, [activeContext, fetchRoles, persistContext, user])
 
-  const login = useCallback(async (email: string, password: string) => {
+  const login = useCallback(async (identifier: string, password: string) => {
+    const normalizedIdentifier = identifier.trim()
+    let email = normalizedIdentifier.toLowerCase()
+
+    if (!normalizedIdentifier.includes('@')) {
+      const { data, error: resolveError } = await supabase.rpc('resolve_login_email', {
+        p_employee_id: normalizedIdentifier,
+      })
+
+      if (resolveError) {
+        throw resolveError
+      }
+
+      if (!data || typeof data !== 'string') {
+        throw new Error('Invalid login credentials.')
+      }
+
+      email = data.toLowerCase()
+    }
+
     const { error } = await supabase.auth.signInWithPassword({ email, password })
 
     if (error) {
-      throw error
+      throw new Error('Invalid login credentials.')
     }
   }, [])
 

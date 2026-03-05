@@ -5,10 +5,10 @@ export default function AdminHomePage() {
     <main className="p-6">
       <Card>
         <CardHeader>
-          <CardTitle>Admin Dashboard</CardTitle>
-          <CardDescription>User and role administration surfaces are next in sequence.</CardDescription>
+          <CardTitle>Admin</CardTitle>
+          <CardDescription>Users, clients, and logs.</CardDescription>
         </CardHeader>
-        <CardContent>Route access control is active for L5 admin users.</CardContent>
+        <CardContent>Scoped access is active.</CardContent>
       </Card>
     </main>
   )

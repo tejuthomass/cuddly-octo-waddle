@@ -1,4 +1,17 @@
 import { NavLink } from 'react-router-dom'
+import type { LucideIcon } from 'lucide-react'
+import {
+  Activity,
+  BarChart3,
+  Building2,
+  ClipboardCheck,
+  ClipboardList,
+  Gauge,
+  LayoutDashboard,
+  ShieldCheck,
+  Users,
+  Wrench,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { AppRole } from '@/types/database'
 
@@ -9,6 +22,7 @@ interface SidebarProps {
 interface NavItem {
   label: string
   to: string
+  icon: LucideIcon
   end?: boolean
 }
 
@@ -27,27 +41,23 @@ function navItemsByRole(role: AppRole): NavItem[] {
       {
         label: 'Dashboard',
         to: '/admin',
+        icon: LayoutDashboard,
         end: true,
       },
       {
-        label: 'User Management',
+        label: 'Users',
         to: '/admin/users',
+        icon: Users,
       },
       {
-        label: 'Role Assignment',
-        to: '/admin/roles',
-      },
-      {
-        label: 'Client Management',
+        label: 'Clients',
         to: '/admin/clients',
+        icon: Building2,
       },
       {
-        label: 'Password Reset',
-        to: '/admin/password-reset',
-      },
-      {
-        label: 'Active Sessions',
-        to: '/admin/sessions',
+        label: 'Logs',
+        to: '/admin/logs',
+        icon: ClipboardList,
       },
     ]
   }
@@ -57,15 +67,18 @@ function navItemsByRole(role: AppRole): NavItem[] {
       {
         label: 'Dashboard',
         to: '/manager',
+        icon: LayoutDashboard,
         end: true,
       },
       {
-        label: 'Asset Management',
+        label: 'Assets',
         to: '/manager/assets',
+        icon: Wrench,
       },
       {
-        label: 'Form Builder',
+        label: 'Forms',
         to: '/manager/templates',
+        icon: ClipboardList,
       },
     ]
   }
@@ -75,15 +88,18 @@ function navItemsByRole(role: AppRole): NavItem[] {
       {
         label: 'Dashboard',
         to: '/supervisor',
+        icon: LayoutDashboard,
         end: true,
       },
       {
-        label: 'Review Queue',
+        label: 'Reviews',
         to: '/supervisor/reviews',
+        icon: ClipboardCheck,
       },
       {
-        label: 'Abnormality Tickets',
+        label: 'Tickets',
         to: '/supervisor/tickets',
+        icon: Activity,
       },
     ]
   }
@@ -93,15 +109,18 @@ function navItemsByRole(role: AppRole): NavItem[] {
       {
         label: 'Dashboard',
         to: '/management',
+        icon: LayoutDashboard,
         end: true,
       },
       {
-        label: 'KPI Overview',
+        label: 'KPIs',
         to: '/management/overview',
+        icon: BarChart3,
       },
       {
         label: 'Abnormalities',
         to: '/management/abnormalities',
+        icon: Gauge,
       },
     ]
   }
@@ -111,15 +130,18 @@ function navItemsByRole(role: AppRole): NavItem[] {
       {
         label: 'Dashboard',
         to: '/client',
+        icon: LayoutDashboard,
         end: true,
       },
       {
         label: 'Overview',
         to: '/client/overview',
+        icon: BarChart3,
       },
       {
         label: 'History',
         to: '/client/history',
+        icon: ClipboardList,
       },
     ]
   }
@@ -128,6 +150,7 @@ function navItemsByRole(role: AppRole): NavItem[] {
     {
       label: 'Dashboard',
       to: defaultDashboard[role],
+      icon: ShieldCheck,
       end: true,
     },
   ]
@@ -137,7 +160,7 @@ export function Sidebar({ role }: SidebarProps) {
   const navItems = navItemsByRole(role)
 
   return (
-    <aside className="hidden w-64 border-r border-border/70 bg-card/60 px-4 py-6 lg:block">
+    <aside className="hidden h-full w-64 overflow-y-auto border-r border-border/70 bg-card/60 px-4 py-6 lg:block">
       <div className="mb-6 px-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Operations</div>
       <nav className="space-y-1">
         {navItems.map((navItem) => (
@@ -152,7 +175,10 @@ export function Sidebar({ role }: SidebarProps) {
               )
             }
           >
-            {navItem.label}
+            <span className="flex items-center gap-2">
+              <navItem.icon className="h-4 w-4 shrink-0" />
+              <span>{navItem.label}</span>
+            </span>
           </NavLink>
         ))}
       </nav>

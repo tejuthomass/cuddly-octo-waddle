@@ -6,7 +6,6 @@ import type { AppRole } from '@/types/database'
 interface ProtectedRouteProps {
   allowedRoles?: AppRole[]
   requiresAuth?: boolean
-  allowOrgBypass?: boolean
 }
 
 function roleHomePath(role: AppRole): string {
@@ -22,8 +21,8 @@ function roleHomePath(role: AppRole): string {
   return map[role]
 }
 
-export function ProtectedRoute({ allowedRoles, requiresAuth = true, allowOrgBypass = false }: ProtectedRouteProps) {
-  const { isHydrating, user, activeContext, requiresOrganizationSelection } = useAuth()
+export function ProtectedRoute({ allowedRoles, requiresAuth = true }: ProtectedRouteProps) {
+  const { isHydrating, user, activeContext } = useAuth()
   const location = useLocation()
 
   if (isHydrating) {
@@ -34,13 +33,9 @@ export function ProtectedRoute({ allowedRoles, requiresAuth = true, allowOrgBypa
     return <Navigate to="/login" replace state={{ from: location }} />
   }
 
-  if (!allowOrgBypass && requiresOrganizationSelection) {
-    return <Navigate to="/select-org" replace />
-  }
-
   if (allowedRoles && allowedRoles.length > 0) {
     if (!activeContext) {
-      return <Navigate to="/select-org" replace />
+      return <Navigate to="/" replace />
     }
 
     if (!allowedRoles.includes(activeContext.role)) {

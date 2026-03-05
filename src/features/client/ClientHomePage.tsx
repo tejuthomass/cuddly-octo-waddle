@@ -6,15 +6,15 @@ export default function ClientHomePage() {
     <main className="space-y-6 p-6">
       <Card>
         <CardHeader>
-          <CardTitle>Client Viewer Dashboard</CardTitle>
-          <CardDescription>Read-only client reports and abnormality history.</CardDescription>
+          <CardTitle>Client</CardTitle>
+          <CardDescription>Reports and history.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
-          <Link className="block rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-muted" to="/client/overview">
-            Open Client Overview
+          <Link className="block h-9 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-muted" to="/client/overview">
+            Overview
           </Link>
-          <Link className="block rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-muted" to="/client/history">
-            Open Inspection & Ticket History
+          <Link className="block h-9 rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-muted" to="/client/history">
+            History
           </Link>
         </CardContent>
       </Card>

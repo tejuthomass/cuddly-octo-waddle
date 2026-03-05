@@ -7,18 +7,11 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-interface CreateUserPayload {
+interface UpdateUserPayload {
+  user_id?: string
   email?: string
   full_name?: string
-  user_id?: string
   phone?: string
-}
-
-function normalizePhone(value: string): string {
-  const trimmed = value.trim()
-  const hasPlus = trimmed.startsWith('+')
-  const digitsOnly = trimmed.replace(/[^\d]/g, '')
-  return `${hasPlus ? '+' : ''}${digitsOnly}`
 }
 
 function jsonResponse(status: number, payload: Record<string, unknown>) {
@@ -76,77 +69,52 @@ Deno.serve(async (request) => {
   }
 
   if (!callerRoles || callerRoles.length === 0) {
-    const { data: legacyRoles, error: legacyRolesError } = await adminClient
-      .from('user_roles')
-      .select('id')
-      .eq('user_id', callerUserId)
-      .eq('role', 'l5_admin')
-      .eq('is_active', true)
-      .limit(1)
-
-    if (legacyRolesError) {
-      return jsonResponse(500, { error: legacyRolesError.message })
-    }
-
-    if (!legacyRoles || legacyRoles.length === 0) {
-      return jsonResponse(403, { error: 'Only L5 admins can create users.' })
-    }
+    return jsonResponse(403, { error: 'Only L5 admins can update users.' })
   }
 
-  let payload: CreateUserPayload
-
+  let payload: UpdateUserPayload
   try {
-    payload = (await request.json()) as CreateUserPayload
+    payload = (await request.json()) as UpdateUserPayload
   } catch {
     return jsonResponse(400, { error: 'Invalid JSON body.' })
   }
 
-  const email = payload.email?.trim().toLowerCase() ?? ''
-  const fullName = payload.full_name?.trim() ?? ''
-  const userId = payload.user_id?.trim().toUpperCase() ?? ''
-  const normalizedPhone = payload.phone ? normalizePhone(payload.phone) : null
-  const phone = normalizedPhone
-  const password = phone ?? ''
+  const userId = payload.user_id?.trim()
+  const email = payload.email?.trim().toLowerCase()
+  const fullName = payload.full_name?.trim()
+  const phone = payload.phone?.trim()
 
-  if (!email || !fullName || !phone) {
-    return jsonResponse(400, { error: 'email, full_name, and phone are required.' })
+  if (!userId || !email || !fullName || !phone) {
+    return jsonResponse(400, { error: 'user_id, email, full_name, and phone are required.' })
   }
 
-  if (!/^\+?[1-9][0-9]{7,14}$/.test(phone)) {
-    return jsonResponse(400, {
-      error: 'Phone must be a valid international number (digits only, optional leading +, total 8-15 digits).',
-    })
-  }
-
-  const { data: createdUserData, error: createUserError } = await adminClient.auth.admin.createUser({
+  const { error: authUpdateError } = await adminClient.auth.admin.updateUserById(userId, {
     email,
-    password,
-    email_confirm: true,
     user_metadata: {
       full_name: fullName,
+      phone,
     },
   })
 
-  if (createUserError || !createdUserData.user) {
-    return jsonResponse(400, { error: createUserError?.message ?? 'Unable to create auth user.' })
+  if (authUpdateError) {
+    return jsonResponse(400, { error: authUpdateError.message })
   }
 
-  const { error: profileError } = await adminClient.from('profiles').upsert({
-    id: createdUserData.user.id,
-    full_name: fullName,
-    employee_id: userId || null,
-    email,
-    phone,
-    is_active: true,
-  })
+  const { error: profileUpdateError } = await adminClient
+    .from('profiles')
+    .update({
+      email,
+      full_name: fullName,
+      phone,
+    })
+    .eq('id', userId)
 
-  if (profileError) {
-    return jsonResponse(500, { error: profileError.message })
+  if (profileUpdateError) {
+    return jsonResponse(500, { error: profileUpdateError.message })
   }
 
   return jsonResponse(200, {
-    user_id: createdUserData.user.id,
-    email,
-    message: 'User created successfully.',
+    message: 'User updated successfully.',
+    user_id: userId,
   })
 })

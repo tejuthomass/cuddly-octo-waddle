@@ -12,7 +12,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { toHumanErrorMessage } from '@/lib/errors'
 
 const loginSchema = z.object({
-  email: z.email('Enter a valid email address.'),
+  userId: z.string().min(3, 'Enter a valid user ID.'),
   password: z.string().min(8, 'Password must be at least 8 characters.'),
 })
 
@@ -29,7 +29,7 @@ export function LoginPage() {
   } = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      email: '',
+      userId: '',
       password: '',
     },
   })
@@ -38,7 +38,7 @@ export function LoginPage() {
     setIsSubmitting(true)
 
     try {
-      await login(values.email, values.password)
+      await login(values.userId, values.password)
       toast.success('Welcome back.')
     } catch (error) {
       toast.error(toHumanErrorMessage(error, 'Unable to sign in. Please verify your credentials.'))
@@ -56,16 +56,16 @@ export function LoginPage() {
           </div>
           <div>
             <CardTitle className="text-2xl">Facility CMMS</CardTitle>
-            <CardDescription>Sign in with your assigned work account.</CardDescription>
+            <CardDescription>Sign in with your user ID and password.</CardDescription>
           </div>
         </CardHeader>
 
         <CardContent>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" autoComplete="email" {...register('email')} />
-              {errors.email ? <p className="text-sm text-destructive">{errors.email.message}</p> : null}
+              <Label htmlFor="userId">User ID</Label>
+              <Input id="userId" autoComplete="username" {...register('userId')} />
+              {errors.userId ? <p className="text-sm text-destructive">{errors.userId.message}</p> : null}
             </div>
 
             <div className="space-y-2">

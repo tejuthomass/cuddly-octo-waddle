@@ -21,35 +21,36 @@ export default function ActiveSessionsPage() {
     <main className="space-y-6 p-6">
       <Card>
         <CardHeader>
-          <CardTitle>Active Sessions Monitor</CardTitle>
-          <CardDescription>Force logout by clearing a user's active session token.</CardDescription>
+          <CardTitle>Sessions</CardTitle>
+          <CardDescription>Active user sessions.</CardDescription>
         </CardHeader>
         <CardContent>
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading active sessions...</p>
+            <p className="text-sm text-muted-foreground">Loading...</p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto rounded-md border border-border/70">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b">
-                    <th className="p-2 text-left">User</th>
-                    <th className="p-2 text-left">Last Seen</th>
-                    <th className="p-2 text-left">Action</th>
+                  <tr className="border-b bg-muted/40">
+                    <th className="p-3 text-left">User</th>
+                    <th className="p-3 text-left">Last Seen</th>
+                    <th className="p-3 text-left">Act</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sessions.map((session) => (
                     <tr key={session.user_id} className="border-b">
-                      <td className="p-2">{session.profiles?.[0]?.full_name ?? session.user_id}</td>
-                      <td className="p-2 text-muted-foreground">{new Date(session.last_seen).toLocaleString()}</td>
-                      <td className="p-2">
+                      <td className="p-3">{session.profiles?.[0]?.full_name ?? session.user_id}</td>
+                      <td className="p-3 text-muted-foreground">{new Date(session.last_seen).toLocaleString()}</td>
+                      <td className="p-3">
                         <Button
                           size="sm"
                           variant="destructive"
+                          className="h-9 px-3"
                           disabled={clearSessionMutation.isPending}
                           onClick={() => void onClearSession(session.user_id)}
                         >
-                          Clear Session
+                          Clear
                         </Button>
                       </td>
                     </tr>

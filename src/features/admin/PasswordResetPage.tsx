@@ -44,18 +44,18 @@ export default function PasswordResetPage() {
     <main className="space-y-6 p-6">
       <Card>
         <CardHeader>
-          <CardTitle>Password Reset</CardTitle>
-          <CardDescription>L5 admins can trigger password reset emails for users.</CardDescription>
+          <CardTitle>Password</CardTitle>
+          <CardDescription>Send a reset link.</CardDescription>
         </CardHeader>
         <CardContent>
           <form className="space-y-4" onSubmit={handleSubmit(onSendReset)}>
             <div className="space-y-2">
-              <Label htmlFor="email">User Email</Label>
-              <Input id="email" type="email" {...register('email')} />
+              <Label htmlFor="email">Email</Label>
+              <Input id="email" type="email" className="h-9" {...register('email')} />
               {errors.email ? <p className="text-xs text-destructive">{errors.email.message}</p> : null}
             </div>
-            <Button type="submit" disabled={passwordResetMutation.isPending}>
-              {passwordResetMutation.isPending ? 'Sending...' : 'Send Password Reset Email'}
+            <Button type="submit" className="h-9 px-3" disabled={passwordResetMutation.isPending}>
+              {passwordResetMutation.isPending ? 'Sending...' : 'Send'}
             </Button>
           </form>
         </CardContent>

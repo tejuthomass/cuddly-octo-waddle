@@ -7,15 +7,15 @@ export default function ManagerHomePage() {
     <main className="space-y-6 p-6">
       <Card>
         <CardHeader>
-          <CardTitle>Manager Dashboard</CardTitle>
-          <CardDescription>Use manager modules to maintain assets and inspection templates.</CardDescription>
+          <CardTitle>Manager</CardTitle>
+          <CardDescription>Assets and forms.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-3">
-          <Link to="/manager/assets" className={buttonVariants()}>
-            Asset Management
+          <Link to="/manager/assets" className={buttonVariants({ className: 'h-9 px-3' })}>
+            Assets
           </Link>
-          <Link to="/manager/templates" className={buttonVariants({ variant: 'secondary' })}>
-            Form Builder
+          <Link to="/manager/templates" className={buttonVariants({ variant: 'secondary', className: 'h-9 px-3' })}>
+            Forms
           </Link>
         </CardContent>
       </Card>

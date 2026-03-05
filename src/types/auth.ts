@@ -19,7 +19,7 @@ export interface AuthContextValue {
   activeContext: ActiveOrganizationContext | null
   isHydrating: boolean
   requiresOrganizationSelection: boolean
-  login: (email: string, password: string) => Promise<void>
+  login: (identifier: string, password: string) => Promise<void>
   logout: () => Promise<void>
   refreshRoles: () => Promise<void>
   selectOrganization: (context: ActiveOrganizationContext) => void

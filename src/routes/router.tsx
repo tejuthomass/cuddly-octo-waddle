@@ -6,7 +6,6 @@ import { AppShell } from '@/components/layout/AppShell'
 import { MobileNav } from '@/components/layout/MobileNav'
 import { TopBar } from '@/components/layout/TopBar'
 import { LoginPage } from '@/features/auth/LoginPage'
-import { OrganizationSwitcherPage } from '@/features/auth/OrganizationSwitcherPage'
 import { useAuth } from '@/hooks/useAuth'
 
 const TechnicianHomePage = lazy(() => import('@/features/technician/TechnicianHomePage'))
@@ -24,13 +23,14 @@ const ManagementOverviewPage = lazy(() => import('@/features/management/Manageme
 const ManagementAbnormalitiesPage = lazy(() => import('@/features/management/ManagementAbnormalitiesPage'))
 const AdminHomePage = lazy(() => import('@/features/admin/AdminHomePage'))
 const UserManagementPage = lazy(() => import('@/features/admin/UserManagementPage'))
-const RoleAssignmentPage = lazy(() => import('@/features/admin/RoleAssignmentPage'))
 const ClientManagementPage = lazy(() => import('@/features/admin/ClientManagementPage'))
 const PasswordResetPage = lazy(() => import('@/features/admin/PasswordResetPage'))
 const ActiveSessionsPage = lazy(() => import('@/features/admin/ActiveSessionsPage'))
+const AuditLogsPage = lazy(() => import('@/features/admin/AuditLogsPage'))
 const ClientHomePage = lazy(() => import('@/features/client/ClientHomePage'))
 const ClientOverviewPage = lazy(() => import('@/features/client/ClientOverviewPage'))
 const ClientHistoryPage = lazy(() => import('@/features/client/ClientHistoryPage'))
+const SettingsPage = lazy(() => import('@/features/settings/SettingsPage'))
 const ChangePasswordPage = lazy(() => import('@/features/settings/ChangePasswordPage'))
 
 function LazyRoute({ children }: { children: React.ReactNode }) {
@@ -63,28 +63,28 @@ function SettingsLayoutFrame() {
 }
 
 function PostLoginRedirect() {
-  const { user, activeContext, requiresOrganizationSelection } = useAuth()
+  const { user, activeContext } = useAuth()
 
   if (!user) {
     return <Navigate to="/login" replace />
   }
 
-  if (requiresOrganizationSelection || !activeContext) {
-    return <Navigate to="/select-org" replace />
+  if (!activeContext) {
+    return <Navigate to="/login" replace />
   }
 
   return <Navigate to={defaultPathForRole(activeContext.role)} replace />
 }
 
 function LoginRedirectGuard() {
-  const { user, activeContext, requiresOrganizationSelection } = useAuth()
+  const { user, activeContext } = useAuth()
 
   if (!user) {
     return <LoginPage />
   }
 
-  if (requiresOrganizationSelection || !activeContext) {
-    return <Navigate to="/select-org" replace />
+  if (!activeContext) {
+    return <LoginPage />
   }
 
   return <Navigate to={defaultPathForRole(activeContext.role)} replace />
@@ -100,23 +100,22 @@ export const router = createBrowserRouter([
     element: <LoginRedirectGuard />,
   },
   {
-    element: <ProtectedRoute allowOrgBypass />,
-    children: [
-      {
-        path: '/select-org',
-        element: <OrganizationSwitcherPage />,
-      },
-    ],
-  },
-  {
     element: <ProtectedRoute />,
     children: [
       {
-        path: '/settings/password',
+        path: '/settings',
         element: <SettingsLayoutFrame />,
         children: [
           {
             index: true,
+            element: (
+              <LazyRoute>
+                <SettingsPage />
+              </LazyRoute>
+            ),
+          },
+          {
+            path: 'password',
             element: (
               <LazyRoute>
                 <ChangePasswordPage />
@@ -299,14 +298,6 @@ export const router = createBrowserRouter([
             ),
           },
           {
-            path: 'roles',
-            element: (
-              <LazyRoute>
-                <RoleAssignmentPage />
-              </LazyRoute>
-            ),
-          },
-          {
             path: 'clients',
             element: (
               <LazyRoute>
@@ -327,6 +318,14 @@ export const router = createBrowserRouter([
             element: (
               <LazyRoute>
                 <ActiveSessionsPage />
+              </LazyRoute>
+            ),
+          },
+          {
+            path: 'logs',
+            element: (
+              <LazyRoute>
+                <AuditLogsPage />
               </LazyRoute>
             ),
           },

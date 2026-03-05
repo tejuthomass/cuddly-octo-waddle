@@ -11,11 +11,11 @@ export function AppShell() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="h-screen overflow-hidden bg-background text-foreground">
       <TopBar />
-      <div className="flex min-h-[calc(100vh-3.5rem)]">
+      <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden">
         <Sidebar role={activeContext.role} />
-        <div className="flex-1">
+        <div className="flex-1 overflow-y-auto">
           <Outlet />
         </div>
       </div>
