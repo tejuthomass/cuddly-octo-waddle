@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth } from '@/hooks/useAuth'
 import { toHumanErrorMessage } from '@/lib/errors'
+import { useTheme } from '@/store/ThemeContext'
 
 const loginSchema = z.object({
   userId: z.string().min(3, 'Enter a valid user ID.'),
@@ -20,6 +21,7 @@ type LoginFormValues = z.infer<typeof loginSchema>
 
 export function LoginPage() {
   const { login } = useAuth()
+  const { mode, setMode } = useTheme()
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const {
@@ -57,6 +59,30 @@ export function LoginPage() {
           <div>
             <CardTitle className="text-2xl">Facility CMMS</CardTitle>
             <CardDescription>Sign in with your user ID and password.</CardDescription>
+          </div>
+
+          <div className="mx-auto flex w-full max-w-[220px] items-center justify-center gap-2 rounded-lg border border-border/70 p-1">
+            <button
+              type="button"
+              onClick={() => setMode('light')}
+              className={`h-8 flex-1 rounded-md text-xs font-medium transition-colors ${mode === 'light' ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              Light
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('dark')}
+              className={`h-8 flex-1 rounded-md text-xs font-medium transition-colors ${mode === 'dark' ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              Dark
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('system')}
+              className={`h-8 flex-1 rounded-md text-xs font-medium transition-colors ${mode === 'system' ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              Auto
+            </button>
           </div>
         </CardHeader>
 

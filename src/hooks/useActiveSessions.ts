@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 
@@ -11,6 +12,21 @@ export interface ActiveSessionRow {
 const sessionsQueryKey = ['admin', 'active-sessions'] as const
 
 export function useActiveSessions() {
+  const queryClient = useQueryClient()
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('admin-active-sessions')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'active_sessions' }, () => {
+        void queryClient.invalidateQueries({ queryKey: sessionsQueryKey })
+      })
+      .subscribe()
+
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [queryClient])
+
   return useQuery({
     queryKey: sessionsQueryKey,
     queryFn: async () => {

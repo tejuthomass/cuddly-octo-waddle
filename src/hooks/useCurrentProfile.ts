@@ -41,22 +41,31 @@ export function useUpdateAvatar() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (avatarBlob: Blob) => {
+    mutationFn: async (avatarBlob: Blob | null) => {
       if (!user?.id) {
         throw new Error('No authenticated user.')
       }
 
       const storagePath = `${user.id}/avatar.webp`
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(storagePath, avatarBlob, { upsert: true, contentType: 'image/webp' })
+      let avatarUrl: string | null = null
 
-      if (uploadError) {
-        throw uploadError
+      if (avatarBlob) {
+        const { error: uploadError } = await supabase.storage
+          .from('avatars')
+          .upload(storagePath, avatarBlob, { upsert: true, contentType: 'image/webp' })
+
+        if (uploadError) {
+          throw uploadError
+        }
+
+        const { data: publicUrlData } = supabase.storage.from('avatars').getPublicUrl(storagePath)
+        avatarUrl = `${publicUrlData.publicUrl}?v=${Date.now()}`
+      } else {
+        const { error: removeError } = await supabase.storage.from('avatars').remove([storagePath])
+        if (removeError && !String(removeError.message ?? '').toLowerCase().includes('not found')) {
+          throw removeError
+        }
       }
-
-      const { data: publicUrlData } = supabase.storage.from('avatars').getPublicUrl(storagePath)
-      const avatarUrl = `${publicUrlData.publicUrl}?v=${Date.now()}`
 
       const { error: updateError } = await supabase
         .from('profiles')

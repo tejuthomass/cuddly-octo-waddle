@@ -1,14 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowDown, ArrowDownUp, ArrowUp, Eye, Filter, Power, Search, Trash2, UserPlus, X } from 'lucide-react'
+import { ArrowDown, ArrowDownUp, ArrowUp, Eye, Filter, Power, PowerOff, Search, Trash2, UserPlus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { PageSizeSelect } from '@/components/ui/page-size-select'
 import { SearchableSelect } from '@/components/ui/searchable-select'
+import { TooltipIconButton } from '@/components/ui/tooltip-icon-button'
 import type { RoleCode } from '@/hooks/useAdminAccess'
 import { useCompanyOptions, useFacilityOptions } from '@/hooks/useAdminAccess'
 import { useAuth } from '@/hooks/useAuth'
@@ -136,6 +139,7 @@ function roleBadgeClass(roleCode: RoleCode | null) {
 }
 
 export default function UserManagementPage() {
+  const navigate = useNavigate()
   const { user: currentUser } = useAuth()
   const { data: users = [], isLoading } = useAdminUsers()
   const { data: companies = [] } = useCompanyOptions()
@@ -149,6 +153,8 @@ export default function UserManagementPage() {
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState<'ALL' | RoleCode>('ALL')
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL')
+  const [companyFilter, setCompanyFilter] = useState<string>('ALL')
+  const [facilityFilter, setFacilityFilter] = useState<string>('ALL')
   const [isFilterOpen, setIsFilterOpen] = useState(false)
 
   const [isCreateOpen, setIsCreateOpen] = useState(false)
@@ -163,6 +169,11 @@ export default function UserManagementPage() {
   const [deleteTargetUser, setDeleteTargetUser] = useState<AdminUserRow | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('created_at')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
+  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([])
+  const [userPage, setUserPage] = useState(1)
+  const [userPageSize, setUserPageSize] = useState(10)
+  const [pendingBulkAction, setPendingBulkAction] = useState<'activate' | 'deactivate' | null>(null)
+  const lastSelfSelectToastAtRef = useRef(0)
 
   const {
     register: registerCreate,
@@ -255,6 +266,43 @@ export default function UserManagementPage() {
     return facilities.filter((facility) => facility.companyId === detailCompanyId)
   }, [detailCompanyId, facilities])
 
+  const companyById = useMemo(() => {
+    const map = new Map<string, string>()
+    companies.forEach((company) => map.set(company.id, company.label))
+    return map
+  }, [companies])
+
+  const facilityById = useMemo(() => {
+    const map = new Map<string, string>()
+    facilities.forEach((facility) => map.set(facility.id, facility.label))
+    return map
+  }, [facilities])
+
+  const companyFilterOptions = useMemo(
+    () => [{ value: 'ALL', label: 'All clients' }, ...companies.map((company) => ({ value: company.id, label: company.label }))],
+    [companies],
+  )
+
+  const facilityFilterOptions = useMemo(() => {
+    if (companyFilter === 'ALL') {
+      return [{ value: 'ALL', label: 'All facilities' }]
+    }
+
+    return [
+      { value: 'ALL', label: 'All facilities' },
+      ...facilities
+        .filter((facility) => facility.companyId === companyFilter)
+        .map((facility) => ({ value: facility.id, label: facility.label })),
+    ]
+  }, [companyFilter, facilities])
+
+  const notifySelfSelectionBlocked = () => {
+    const now = Date.now()
+    if (now - lastSelfSelectToastAtRef.current < 1400) return
+    lastSelfSelectToastAtRef.current = now
+    toast.info('You cannot select your own account.')
+  }
+
   const filteredUsers = useMemo(() => {
     const query = search.trim().toLowerCase()
 
@@ -262,6 +310,8 @@ export default function UserManagementPage() {
       if (roleFilter !== 'ALL' && row.role_code !== roleFilter) return false
       if (statusFilter === 'ACTIVE' && !row.is_active) return false
       if (statusFilter === 'INACTIVE' && row.is_active) return false
+      if (companyFilter !== 'ALL' && row.company_id !== companyFilter) return false
+      if (facilityFilter !== 'ALL' && row.facility_id !== facilityFilter) return false
       if (!query) return true
 
       return [row.user_id, row.full_name, row.email, row.phone ?? '', row.role_title ?? '', row.role_code ?? '']
@@ -269,7 +319,7 @@ export default function UserManagementPage() {
         .toLowerCase()
         .includes(query)
     })
-  }, [roleFilter, search, statusFilter, users])
+  }, [companyFilter, facilityFilter, roleFilter, search, statusFilter, users])
 
   const sortedUsers = useMemo(() => {
     const rows = [...filteredUsers]
@@ -295,6 +345,16 @@ export default function UserManagementPage() {
     return rows
   }, [filteredUsers, sortDirection, sortKey])
 
+  const totalUserPages = Math.max(1, Math.ceil(sortedUsers.length / userPageSize))
+  const pagedUsers = useMemo(() => {
+    const start = (userPage - 1) * userPageSize
+    return sortedUsers.slice(start, start + userPageSize)
+  }, [sortedUsers, userPage, userPageSize])
+  const pageUserIds = useMemo(
+    () => pagedUsers.filter((row) => row.id !== currentUser?.id).map((row) => row.id),
+    [currentUser?.id, pagedUsers],
+  )
+
   const onSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))
@@ -303,6 +363,76 @@ export default function UserManagementPage() {
 
     setSortKey(key)
     setSortDirection('asc')
+  }
+
+  const toggleUserSelection = (rowId: string) => {
+    if (rowId === currentUser?.id) {
+      notifySelfSelectionBlocked()
+      return
+    }
+
+    setSelectedUserIds((prev) => (prev.includes(rowId) ? prev.filter((id) => id !== rowId) : [...prev, rowId]))
+  }
+
+  const selectedUsers = useMemo(
+    () => sortedUsers.filter((row) => selectedUserIds.includes(row.id)),
+    [selectedUserIds, sortedUsers],
+  )
+  const eligibleFilteredUsers = useMemo(
+    () => sortedUsers.filter((row) => row.id !== currentUser?.id),
+    [currentUser?.id, sortedUsers],
+  )
+  const allPageSelected = pageUserIds.length > 0 && pageUserIds.every((id) => selectedUserIds.includes(id))
+  const allFilteredSelected = eligibleFilteredUsers.length > 0 && eligibleFilteredUsers.every((row) => selectedUserIds.includes(row.id))
+  const canSelectFiltered = allPageSelected && !allFilteredSelected && eligibleFilteredUsers.length > pageUserIds.length
+
+  const onTogglePageSelection = () => {
+    setSelectedUserIds((prev) => {
+      if (allPageSelected) {
+        return prev.filter((id) => !pageUserIds.includes(id))
+      }
+
+      return Array.from(new Set([...prev, ...pageUserIds]))
+    })
+  }
+
+  const onSelectFilteredUsers = () => {
+    const filteredIds = eligibleFilteredUsers.map((row) => row.id)
+    if (filteredIds.length < sortedUsers.length) {
+      notifySelfSelectionBlocked()
+    }
+    setSelectedUserIds(filteredIds)
+  }
+
+  const onBulkToggleUsers = async (isActive: boolean) => {
+    const targets = selectedUsers.filter((row) => !(currentUser?.id === row.id && !isActive))
+    if (targets.length === 0) {
+      toast.error('No eligible users selected for this action.')
+      return
+    }
+
+    try {
+      await Promise.all(targets.map((row) => toggleUserMutation.mutateAsync({ userId: row.id, isActive })))
+      toast.success(isActive ? 'Selected users activated.' : 'Selected users deactivated.')
+      setSelectedUserIds([])
+    } catch (error) {
+      toast.error(toHumanErrorMessage(error, 'Unable to update selected user statuses.'))
+    }
+  }
+
+  const onOpenBulkActionConfirm = (isActive: boolean) => {
+    if (selectedUsers.length === 0) {
+      toast.error('No users selected.')
+      return
+    }
+
+    setPendingBulkAction(isActive ? 'activate' : 'deactivate')
+  }
+
+  const onConfirmBulkAction = async () => {
+    if (!pendingBulkAction) return
+    await onBulkToggleUsers(pendingBulkAction === 'activate')
+    setPendingBulkAction(null)
   }
 
   const detailReadOnlyClass = !isEditingDetails ? 'cursor-not-allowed opacity-70' : ''
@@ -533,6 +663,20 @@ export default function UserManagementPage() {
     if (refreshed) setSelectedUser(refreshed)
   }, [selectedUser, users])
 
+  useEffect(() => {
+    setUserPage(1)
+  }, [search, roleFilter, statusFilter, companyFilter, facilityFilter, sortKey, sortDirection, userPageSize])
+
+  useEffect(() => {
+    if (userPage > totalUserPages) {
+      setUserPage(totalUserPages)
+    }
+  }, [totalUserPages, userPage])
+
+  useEffect(() => {
+    setSelectedUserIds((prev) => prev.filter((id) => id !== currentUser?.id && sortedUsers.some((row) => row.id === id)))
+  }, [currentUser?.id, sortedUsers])
+
   return (
     <main className="space-y-6 p-6">
       <Card>
@@ -542,8 +686,8 @@ export default function UserManagementPage() {
               <CardTitle className="text-2xl tracking-tight">Users</CardTitle>
               <CardDescription>Create, filter, sort.</CardDescription>
             </div>
-            <Button className="h-9 px-3" onClick={openCreateModal}>
-              <UserPlus className="mr-2 h-4 w-4" />
+            <Button className="inline-flex h-9 items-center justify-center gap-2 px-3" onClick={openCreateModal}>
+              <UserPlus className="h-4 w-4" />
               Add
             </Button>
           </div>
@@ -561,7 +705,7 @@ export default function UserManagementPage() {
           </div>
 
           {isFilterOpen ? (
-            <div className="grid gap-3 rounded-md border border-border/70 bg-muted/20 p-3 md:grid-cols-3">
+            <div className="grid gap-3 rounded-md border border-border/70 bg-muted/20 p-3 md:grid-cols-5">
               <div className="space-y-1">
                 <Label htmlFor="roleFilter">Role</Label>
                 <SearchableSelect
@@ -580,9 +724,61 @@ export default function UserManagementPage() {
                   placeholder="All status"
                 />
               </div>
-              <div className="flex items-end">
-                <Button variant="outline" className="h-9 px-3" onClick={() => { setSearch(''); setRoleFilter('ALL'); setStatusFilter('ALL') }}>Reset</Button>
+              <div className="space-y-1">
+                <Label htmlFor="companyFilter">Client</Label>
+                <SearchableSelect
+                  value={companyFilter}
+                  onChange={(value) => {
+                    setCompanyFilter(value)
+                    setFacilityFilter('ALL')
+                  }}
+                  options={companyFilterOptions}
+                  placeholder="All clients"
+                />
               </div>
+              <div className="space-y-1">
+                <Label htmlFor="facilityFilter">Facility</Label>
+                <SearchableSelect
+                  value={facilityFilter}
+                  onChange={(value) => setFacilityFilter(value)}
+                  options={facilityFilterOptions}
+                  placeholder="All facilities"
+                  disabled={companyFilter === 'ALL'}
+                />
+              </div>
+              <div className="flex items-end">
+                <Button variant="outline" className="h-9 px-3" onClick={() => { setSearch(''); setRoleFilter('ALL'); setStatusFilter('ALL'); setCompanyFilter('ALL'); setFacilityFilter('ALL') }}>Reset</Button>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/10 p-2.5">
+            <p className="px-1 text-sm text-muted-foreground">{selectedUsers.length} selected</p>
+            <div className="flex items-center gap-1.5">
+              <TooltipIconButton onClick={() => onOpenBulkActionConfirm(true)} disabled={selectedUsers.length === 0} tooltip="Activate selected users" aria-label="Activate selected users">
+                <Power className="h-4 w-4" />
+              </TooltipIconButton>
+              <TooltipIconButton onClick={() => onOpenBulkActionConfirm(false)} disabled={selectedUsers.length === 0} tooltip="Deactivate selected users" aria-label="Deactivate selected users">
+                <PowerOff className="h-4 w-4" />
+              </TooltipIconButton>
+            </div>
+          </div>
+
+          {canSelectFiltered ? (
+            <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+              All {pageUserIds.length} users on this page are selected.
+              <Button type="button" variant="link" className="h-auto px-1 text-sm" onClick={onSelectFilteredUsers}>
+                Select all {eligibleFilteredUsers.length} users
+              </Button>
+            </div>
+          ) : null}
+
+          {allFilteredSelected && selectedUserIds.length > 0 ? (
+            <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+              All {eligibleFilteredUsers.length} users are selected.
+              <Button type="button" variant="link" className="h-auto px-1 text-sm" onClick={() => setSelectedUserIds([])}>
+                Clear selection
+              </Button>
             </div>
           ) : null}
 
@@ -593,6 +789,23 @@ export default function UserManagementPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/40">
+                    <th className="w-12 p-3 align-middle text-left" aria-label="Select rows">
+                      <button
+                        type="button"
+                        className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50"
+                        onClick={onTogglePageSelection}
+                        aria-label={allPageSelected ? 'Deselect current page' : 'Select current page'}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={allPageSelected && pageUserIds.length > 0}
+                          onChange={onTogglePageSelection}
+                          onClick={(event) => event.stopPropagation()}
+                          className="table-select-checkbox"
+                          aria-label={allPageSelected ? 'Deselect current page' : 'Select current page'}
+                        />
+                      </button>
+                    </th>
                     <th className="p-3 text-left">
                       <button type="button" onClick={() => onSort('user_id')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'user_id' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         User ID
@@ -618,6 +831,12 @@ export default function UserManagementPage() {
                       </button>
                     </th>
                     <th className="p-3 text-left">
+                      <span className="font-medium text-muted-foreground">Client</span>
+                    </th>
+                    <th className="p-3 text-left">
+                      <span className="font-medium text-muted-foreground">Facility</span>
+                    </th>
+                    <th className="p-3 text-left">
                       <button type="button" onClick={() => onSort('created_at')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'created_at' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         Created
                         {sortIcon('created_at')}
@@ -627,8 +846,41 @@ export default function UserManagementPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedUsers.map((row) => (
-                    <tr key={row.id} onDoubleClick={() => openUserDetails(row)} className="group border-b transition-colors hover:bg-muted/20">
+                  {pagedUsers.map((row) => (
+                    <tr
+                      key={row.id}
+                      onDoubleClick={() => openUserDetails(row)}
+                      onClick={(event) => {
+                        if (event.ctrlKey || event.metaKey) {
+                          toggleUserSelection(row.id)
+                        }
+                      }}
+                      className="group border-b transition-colors hover:bg-muted/20"
+                    >
+                      <td className="w-12 p-3 align-middle">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50">
+                          {currentUser?.id === row.id ? null : (
+                            <button
+                              type="button"
+                              className="flex h-8 w-8 items-center justify-center"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                toggleUserSelection(row.id)
+                              }}
+                              aria-label={`Select user ${row.user_id}`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedUserIds.includes(row.id)}
+                                onChange={() => toggleUserSelection(row.id)}
+                                onClick={(event) => event.stopPropagation()}
+                                className="table-select-checkbox"
+                                aria-label={`Select user ${row.user_id}`}
+                              />
+                            </button>
+                          )}
+                        </div>
+                      </td>
                       <td className="p-3 text-sm">{row.user_id}</td>
                       <td className="p-3">
                         <span className="inline-flex items-center gap-2">
@@ -651,37 +903,48 @@ export default function UserManagementPage() {
                         </span>
                       </td>
                       <td className="p-3">{row.is_active ? 'Active' : 'Inactive'}</td>
+                      <td className="p-3 text-muted-foreground">{row.company_id ? (companyById.get(row.company_id) ?? 'Unknown client') : '-'}</td>
+                      <td className="p-3 text-muted-foreground">{row.facility_id ? (facilityById.get(row.facility_id) ?? 'Unknown facility') : '-'}</td>
                       <td className="p-3 text-muted-foreground">{new Date(row.created_at).toLocaleString()}</td>
                       <td className="p-3">
                         <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
-                          <button
-                            type="button"
-                            className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                            onClick={() => openUserDetails(row)}
-                            aria-label="View details"
+                          <TooltipIconButton
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              openUserDetails(row)
+                            }}
+                            className="h-8 w-8"
+                            tooltip="Open user details"
+                            aria-label="Open user details"
                           >
                             <Eye className="h-4 w-4" />
-                          </button>
+                          </TooltipIconButton>
 
                           {currentUser?.id !== row.id ? (
                             <>
-                              <button
-                                type="button"
-                                className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                onClick={() => void onToggleUserInline(row)}
+                              <TooltipIconButton
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void onToggleUserInline(row)
+                                }}
+                                className="h-8 w-8"
+                                tooltip={row.is_active ? 'Deactivate user' : 'Activate user'}
                                 aria-label={row.is_active ? 'Deactivate user' : 'Activate user'}
                               >
                                 <Power className="h-4 w-4" />
-                              </button>
+                              </TooltipIconButton>
 
-                              <button
-                                type="button"
-                                className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                onClick={() => openDeleteConfirm(row)}
+                              <TooltipIconButton
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  openDeleteConfirm(row)
+                                }}
+                                className="h-8 w-8 hover:text-destructive"
+                                tooltip="Delete user"
                                 aria-label="Delete user"
                               >
                                 <Trash2 className="h-4 w-4" />
-                              </button>
+                              </TooltipIconButton>
                             </>
                           ) : null}
                         </div>
@@ -692,6 +955,20 @@ export default function UserManagementPage() {
               </table>
             </div>
           )}
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">Showing {pagedUsers.length} of {sortedUsers.length}</p>
+            <div className="flex items-center gap-2">
+              <PageSizeSelect value={userPageSize} onChange={setUserPageSize} />
+              <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setUserPage((prev) => Math.max(1, prev - 1))} disabled={userPage <= 1}>
+                Prev
+              </Button>
+              <span className="text-sm text-muted-foreground">{userPage} / {totalUserPages}</span>
+              <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setUserPage((prev) => Math.min(totalUserPages, prev + 1))} disabled={userPage >= totalUserPages}>
+                Next
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
@@ -851,6 +1128,26 @@ export default function UserManagementPage() {
               <div><span className="text-muted-foreground">User ID:</span> <span className="font-medium">{selectedUser.user_id}</span></div>
               <div><span className="text-muted-foreground">Created At:</span> {new Date(selectedUser.created_at).toLocaleString()}</div>
               <div><span className="text-muted-foreground">Status:</span> {selectedUser.is_active ? 'Active' : 'Inactive'}</div>
+            </div>
+            <div className="mb-6 rounded-md border border-border/70 p-4">
+              <p className="mb-3 text-sm font-medium">Profile Photo</p>
+              <div className="flex flex-wrap items-center gap-4">
+                {selectedUser.avatar_url ? (
+                  <img src={selectedUser.avatar_url} alt={selectedUser.full_name || selectedUser.user_id} className="h-14 w-14 rounded-full border border-border object-cover" />
+                ) : (
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full border border-border bg-muted text-base font-semibold">
+                    {(selectedUser.full_name || selectedUser.user_id).slice(0, 1).toUpperCase()}
+                  </div>
+                )}
+
+                {isSelfSelected ? (
+                  <Button type="button" variant="outline" className="h-9 px-3" onClick={() => navigate('/settings')}>
+                    Manage In Settings
+                  </Button>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Only this user can change their photo in their own profile settings.</p>
+                )}
+              </div>
             </div>
             <form className="space-y-4" onSubmit={handleDetailSubmit(onSaveUserDetails)}>
               <div className="space-y-2">
@@ -1034,6 +1331,27 @@ export default function UserManagementPage() {
                     </div>
                   </CardContent>
                 </Card>
+        </div>
+      ) : null}
+
+      {pendingBulkAction ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={() => setPendingBulkAction(null)}>
+          <Card className="w-full max-w-md" onClick={(event) => event.stopPropagation()}>
+            <CardHeader>
+              <CardTitle className="text-base">Confirm Bulk {pendingBulkAction === 'activate' ? 'Activation' : 'Deactivation'}</CardTitle>
+              <CardDescription>
+                You are about to {pendingBulkAction} {selectedUsers.length} selected users. Proceed?
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex justify-end gap-2">
+              <Button variant="outline" className="h-9 px-3" onClick={() => setPendingBulkAction(null)}>
+                Cancel
+              </Button>
+              <Button className="h-9 px-3" onClick={() => void onConfirmBulkAction()}>
+                Confirm
+              </Button>
+            </CardContent>
+          </Card>
         </div>
       ) : null}
     </main>

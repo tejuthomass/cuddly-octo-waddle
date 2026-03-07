@@ -142,4 +142,48 @@
     transition: background-color 9999s ease-in-out 0s;
     caret-color: hsl(var(--foreground));
   }
+
+  .table-select-checkbox {
+    appearance: none;
+    position: relative;
+    width: 1.125rem;
+    height: 1.125rem;
+    border-radius: 0.3rem;
+    border: 1px solid hsl(var(--border));
+    background-color: hsl(var(--background));
+    transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+    cursor: pointer;
+  }
+
+  .table-select-checkbox:hover {
+    border-color: hsl(var(--muted-foreground));
+  }
+
+  .table-select-checkbox:checked {
+    border-color: hsl(var(--primary));
+    background-color: hsl(var(--primary));
+  }
+
+  .table-select-checkbox::after {
+    content: '';
+    position: absolute;
+    left: 0.36rem;
+    top: 0.16rem;
+    width: 0.28rem;
+    height: 0.56rem;
+    border-right: 2px solid transparent;
+    border-bottom: 2px solid transparent;
+    transform: rotate(45deg);
+    transition: border-color 120ms ease;
+  }
+
+  .table-select-checkbox:checked::after {
+    border-right-color: hsl(var(--primary-foreground));
+    border-bottom-color: hsl(var(--primary-foreground));
+  }
+
+  .table-select-checkbox:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px hsl(var(--ring) / 0.3);
+  }
 }

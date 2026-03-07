@@ -178,6 +178,21 @@ export default function SettingsPage() {
     }
   }
 
+  const onRemoveAvatar = async () => {
+    try {
+      await updateAvatarMutation.mutateAsync(null)
+      toast.success('Profile photo removed.')
+      setEditorOpen(false)
+      setImageElement(null)
+      if (imageUrl) {
+        URL.revokeObjectURL(imageUrl)
+        setImageUrl(null)
+      }
+    } catch (error) {
+      toast.error(toHumanErrorMessage(error, 'Unable to remove avatar.'))
+    }
+  }
+
   const onBack = () => {
     const currentPath = `${location.pathname}${location.search}`
     const from = locationState?.from
@@ -252,6 +267,16 @@ export default function SettingsPage() {
                           <Label htmlFor="avatarInput" className="text-sm">Upload</Label>
                           <Input id="avatarInput" type="file" accept="image/*" onChange={onSelectImage} className="h-9 text-sm" />
                           <p className="text-xs text-muted-foreground">Square photos work best.</p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-9 px-3"
+                            onClick={() => void onRemoveAvatar()}
+                            disabled={!profile?.avatar_url || updateAvatarMutation.isPending}
+                          >
+                            Remove
+                          </Button>
                         </div>
                       </div>
 

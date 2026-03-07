@@ -24,6 +24,8 @@ const ManagementAbnormalitiesPage = lazy(() => import('@/features/management/Man
 const AdminHomePage = lazy(() => import('@/features/admin/AdminHomePage'))
 const UserManagementPage = lazy(() => import('@/features/admin/UserManagementPage'))
 const ClientManagementPage = lazy(() => import('@/features/admin/ClientManagementPage'))
+const ClientDetailsPage = lazy(() => import('@/features/admin/ClientDetailsPage'))
+const FacilityDetailsPage = lazy(() => import('@/features/admin/FacilityDetailsPage'))
 const PasswordResetPage = lazy(() => import('@/features/admin/PasswordResetPage'))
 const ActiveSessionsPage = lazy(() => import('@/features/admin/ActiveSessionsPage'))
 const AuditLogsPage = lazy(() => import('@/features/admin/AuditLogsPage'))
@@ -302,6 +304,22 @@ export const router = createBrowserRouter([
             element: (
               <LazyRoute>
                 <ClientManagementPage />
+              </LazyRoute>
+            ),
+          },
+          {
+            path: 'clients/:companyId',
+            element: (
+              <LazyRoute>
+                <ClientDetailsPage />
+              </LazyRoute>
+            ),
+          },
+          {
+            path: 'facilities/:facilityId',
+            element: (
+              <LazyRoute>
+                <FacilityDetailsPage />
               </LazyRoute>
             ),
           },

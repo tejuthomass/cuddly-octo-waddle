@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 
@@ -46,6 +47,33 @@ const usersOptionsKey = ['admin', 'users-options-v2'] as const
 const companiesOptionsKey = ['admin', 'companies-options-v2'] as const
 const facilitiesOptionsKey = ['admin', 'facilities-options-v2'] as const
 
+const realtimeUsersOptionTables = ['profiles'] as const
+const realtimeCompanyOptionTables = ['companies'] as const
+const realtimeFacilityOptionTables = ['facilities'] as const
+const realtimeRoleTables = ['user_role_assignments', 'profiles'] as const
+const realtimeUserCompanyTables = ['user_companies', 'profiles', 'companies'] as const
+const realtimeUserFacilityTables = ['user_facilities', 'profiles', 'facilities'] as const
+
+function useAdminRealtimeInvalidate(queryKey: readonly string[], tables: readonly string[], channelName: string) {
+  const queryClient = useQueryClient()
+
+  useEffect(() => {
+    const channel = tables
+      .reduce(
+        (currentChannel, table) =>
+          currentChannel.on('postgres_changes', { event: '*', schema: 'public', table }, () => {
+            void queryClient.invalidateQueries({ queryKey })
+          }),
+        supabase.channel(channelName),
+      )
+      .subscribe()
+
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [channelName, queryClient, queryKey, tables])
+}
+
 async function enforceAtLeastOneL5OnDeactivate(assignmentId: string) {
   const { data: assignment, error: assignmentError } = await supabase
     .from('user_role_assignments')
@@ -73,6 +101,8 @@ async function enforceAtLeastOneL5OnDeactivate(assignmentId: string) {
 }
 
 export function useRoleFormUsers() {
+  useAdminRealtimeInvalidate(usersOptionsKey, realtimeUsersOptionTables, 'admin-users-options-realtime')
+
   return useQuery({
     queryKey: usersOptionsKey,
     queryFn: async () => {
@@ -93,6 +123,8 @@ export function useRoleFormUsers() {
 }
 
 export function useCompanyOptions() {
+  useAdminRealtimeInvalidate(companiesOptionsKey, realtimeCompanyOptionTables, 'admin-companies-options-realtime')
+
   return useQuery({
     queryKey: companiesOptionsKey,
     queryFn: async () => {
@@ -113,6 +145,8 @@ export function useCompanyOptions() {
 }
 
 export function useFacilityOptions() {
+  useAdminRealtimeInvalidate(facilitiesOptionsKey, realtimeFacilityOptionTables, 'admin-facilities-options-realtime')
+
   return useQuery({
     queryKey: facilitiesOptionsKey,
     queryFn: async () => {
@@ -134,6 +168,8 @@ export function useFacilityOptions() {
 }
 
 export function useRoleAssignments() {
+  useAdminRealtimeInvalidate(rolesKey, realtimeRoleTables, 'admin-role-assignments-realtime')
+
   return useQuery({
     queryKey: rolesKey,
     queryFn: async () => {
@@ -209,6 +245,8 @@ export function useToggleRoleActive() {
 }
 
 export function useUserCompanies() {
+  useAdminRealtimeInvalidate(userCompaniesKey, realtimeUserCompanyTables, 'admin-user-companies-realtime')
+
   return useQuery({
     queryKey: userCompaniesKey,
     queryFn: async () => {
@@ -260,6 +298,8 @@ export function useToggleUserCompany() {
 }
 
 export function useUserFacilities() {
+  useAdminRealtimeInvalidate(userFacilitiesKey, realtimeUserFacilityTables, 'admin-user-facilities-realtime')
+
   return useQuery({
     queryKey: userFacilitiesKey,
     queryFn: async () => {
