@@ -8,22 +8,44 @@ type TooltipIconButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 export function TooltipIconButton({ tooltip, className, children, onMouseEnter, onMouseLeave, onFocus, onBlur, ...props }: TooltipIconButtonProps) {
   const ref = useRef<HTMLButtonElement | null>(null)
+  const tooltipRef = useRef<HTMLDivElement | null>(null)
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState({ left: 0, top: 0 })
 
   const updatePos = () => {
-    if (!ref.current) return
+    if (!ref.current || !tooltipRef.current) return
+
     const rect = ref.current.getBoundingClientRect()
-    setPos({ left: rect.left + rect.width / 2, top: rect.top - 8 })
+    const tooltipRect = tooltipRef.current.getBoundingClientRect()
+    const margin = 10
+    const viewportPadding = 8
+
+    const canPlaceTop = rect.top - tooltipRect.height - margin >= viewportPadding
+    const canPlaceBottom = rect.bottom + tooltipRect.height + margin <= window.innerHeight - viewportPadding
+
+    let top = canPlaceTop
+      ? rect.top - tooltipRect.height - margin
+      : rect.bottom + margin
+
+    if (!canPlaceTop && !canPlaceBottom) {
+      top = Math.max(viewportPadding, Math.min(rect.bottom + margin, window.innerHeight - tooltipRect.height - viewportPadding))
+    }
+
+    const preferredLeft = rect.left + rect.width / 2 - tooltipRect.width / 2
+    const left = Math.max(viewportPadding, Math.min(preferredLeft, window.innerWidth - tooltipRect.width - viewportPadding))
+
+    setPos({ left, top })
   }
 
   useEffect(() => {
     if (!open) return
     updatePos()
+    const rafId = window.requestAnimationFrame(() => updatePos())
     const onWindowChange = () => updatePos()
     window.addEventListener('resize', onWindowChange)
     window.addEventListener('scroll', onWindowChange, true)
     return () => {
+      window.cancelAnimationFrame(rafId)
       window.removeEventListener('resize', onWindowChange)
       window.removeEventListener('scroll', onWindowChange, true)
     }
@@ -66,7 +88,8 @@ export function TooltipIconButton({ tooltip, className, children, onMouseEnter, 
       {open
         ? createPortal(
             <div
-              className="fixed z-[120] -translate-x-1/2 -translate-y-full rounded-md border border-border/80 bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md"
+              ref={tooltipRef}
+              className="fixed z-[200] rounded-md border border-border/80 bg-popover/95 px-2 py-1 text-xs text-popover-foreground shadow-lg backdrop-blur-sm"
               style={{ left: pos.left, top: pos.top }}
               role="tooltip"
             >

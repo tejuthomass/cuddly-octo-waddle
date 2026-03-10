@@ -7,12 +7,8 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-interface UpdateUserPayload {
+interface ResetPasswordPayload {
   user_id?: string
-  email?: string
-  full_name?: string
-  phone?: string
-  is_active?: boolean
 }
 
 function jsonResponse(status: number, payload: Record<string, unknown>) {
@@ -70,74 +66,60 @@ Deno.serve(async (request) => {
   }
 
   if (!callerRoles || callerRoles.length === 0) {
-    return jsonResponse(403, { error: 'Only L5 admins can update users.' })
+    const { data: legacyRoles, error: legacyRolesError } = await adminClient
+      .from('user_roles')
+      .select('id')
+      .eq('user_id', callerUserId)
+      .eq('role', 'l5_admin')
+      .eq('is_active', true)
+      .limit(1)
+
+    if (legacyRolesError) {
+      return jsonResponse(500, { error: legacyRolesError.message })
+    }
+
+    if (!legacyRoles || legacyRoles.length === 0) {
+      return jsonResponse(403, { error: 'Only L5 admins can reset passwords.' })
+    }
   }
 
-  let payload: UpdateUserPayload
+  let payload: ResetPasswordPayload
   try {
-    payload = (await request.json()) as UpdateUserPayload
+    payload = (await request.json()) as ResetPasswordPayload
   } catch {
     return jsonResponse(400, { error: 'Invalid JSON body.' })
   }
 
-  const userId = payload.user_id?.trim()
-  const isActive = payload.is_active
-  const email = payload.email?.trim().toLowerCase()
-  const fullName = payload.full_name?.trim()
-  const phone = payload.phone?.trim()
-
-  if (!userId) {
+  const targetUserId = payload.user_id?.trim()
+  if (!targetUserId) {
     return jsonResponse(400, { error: 'user_id is required.' })
   }
 
-  if (typeof isActive === 'boolean') {
-    const { error: statusUpdateError } = await adminClient
-      .from('profiles')
-      .update({ is_active: isActive })
-      .eq('id', userId)
+  const { data: targetProfile, error: targetProfileError } = await adminClient
+    .from('profiles')
+    .select('phone')
+    .eq('id', targetUserId)
+    .maybeSingle<{ phone: string | null }>()
 
-    if (statusUpdateError) {
-      return jsonResponse(500, { error: statusUpdateError.message })
-    }
-
-    return jsonResponse(200, {
-      message: `User ${isActive ? 'activated' : 'deactivated'} successfully.`,
-      user_id: userId,
-      is_active: isActive,
-    })
+  if (targetProfileError) {
+    return jsonResponse(500, { error: targetProfileError.message })
   }
 
-  if (!email || !fullName || !phone) {
-    return jsonResponse(400, { error: 'user_id, email, full_name, and phone are required for profile updates.' })
+  const phone = (targetProfile?.phone ?? '').trim()
+  if (!phone) {
+    return jsonResponse(400, { error: 'Target user has no phone number configured.' })
   }
 
-  const { error: authUpdateError } = await adminClient.auth.admin.updateUserById(userId, {
-    email,
-    user_metadata: {
-      full_name: fullName,
-      phone,
-    },
+  const { error: resetError } = await adminClient.auth.admin.updateUserById(targetUserId, {
+    password: phone,
   })
 
-  if (authUpdateError) {
-    return jsonResponse(400, { error: authUpdateError.message })
-  }
-
-  const { error: profileUpdateError } = await adminClient
-    .from('profiles')
-    .update({
-      email,
-      full_name: fullName,
-      phone,
-    })
-    .eq('id', userId)
-
-  if (profileUpdateError) {
-    return jsonResponse(500, { error: profileUpdateError.message })
+  if (resetError) {
+    return jsonResponse(400, { error: resetError.message })
   }
 
   return jsonResponse(200, {
-    message: 'User updated successfully.',
-    user_id: userId,
+    message: 'Password reset to user phone number.',
+    user_id: targetUserId,
   })
 })

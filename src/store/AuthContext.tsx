@@ -1,4 +1,4 @@
-import { createContext, useCallback, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
@@ -62,6 +62,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [roles, setRoles] = useState<RoleAssignment[]>([])
   const [activeContext, setActiveContext] = useState<ActiveOrganizationContext | null>(null)
   const [isHydrating, setIsHydrating] = useState(true)
+  const latestTokenRef = useRef<string | null>(null)
 
   const fetchRoles = useCallback(async (userId: string): Promise<RoleAssignment[]> => {
     const { data, error } = await supabase
@@ -90,6 +91,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setUser(null)
     setRoles([])
     setActiveContext(null)
+    setIsHydrating(false)
+    latestTokenRef.current = null
   }, [])
 
   const forceSignOutForSessionMismatch = useCallback(async (userId: string) => {
@@ -165,6 +168,62 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return true
   }, [])
 
+  const rotateRefreshedSessionToken = useCallback(async (nextUser: User, nextToken: string, previousToken: string | null) => {
+    if (!previousToken) {
+      const { data, error } = await supabase
+        .from('active_sessions')
+        .select('session_token')
+        .eq('user_id', nextUser.id)
+        .maybeSingle<{ session_token: string }>()
+
+      if (error) {
+        throw error
+      }
+
+      if (!data?.session_token) {
+        const { error: insertError } = await supabase.from('active_sessions').insert({
+          user_id: nextUser.id,
+          session_token: nextToken,
+          last_seen: new Date().toISOString(),
+        })
+
+        if (insertError) {
+          throw insertError
+        }
+
+        return true
+      }
+
+      if (data.session_token === nextToken) {
+        return true
+      }
+
+      await forceSignOutForSessionMismatch(nextUser.id)
+      return false
+    }
+
+    const { data: updatedRows, error: updateError } = await supabase
+      .from('active_sessions')
+      .update({
+        session_token: nextToken,
+        last_seen: new Date().toISOString(),
+      })
+      .eq('user_id', nextUser.id)
+      .eq('session_token', previousToken)
+      .select('user_id')
+
+    if (updateError) {
+      throw updateError
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      await forceSignOutForSessionMismatch(nextUser.id)
+      return false
+    }
+
+    return true
+  }, [forceSignOutForSessionMismatch])
+
   const validateCurrentSession = useCallback(async (nextUser: User, nextSession: Session) => {
     const nextToken = nextSession.access_token
 
@@ -213,6 +272,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
 
       const roleAssignments = await fetchRoles(nextUser.id)
+      if (roleAssignments.length === 0) {
+        await supabase.auth.signOut()
+        clearLocalAuthState()
+        return
+      }
+
       const initialContext = resolveInitialContext(nextUser, roleAssignments)
 
       setSession(nextSession)
@@ -353,7 +418,41 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
 
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-        void hydrateUserState(nextSession, nextSession?.user ?? null, { claimSession: true })
+        const nextToken = nextSession?.access_token ?? null
+        const nextUser = nextSession?.user ?? null
+        const previousToken = latestTokenRef.current
+        const hadToken = Boolean(previousToken)
+        const shouldHydrate = event === 'SIGNED_IN' && !hadToken
+
+        latestTokenRef.current = nextToken
+        if (shouldHydrate) {
+          setIsHydrating(true)
+        }
+        const refreshFlow = async () => {
+          if (event === 'TOKEN_REFRESHED' && nextSession && nextUser) {
+            const rotated = await rotateRefreshedSessionToken(nextUser, nextSession.access_token, previousToken)
+            if (!rotated) {
+              return
+            }
+
+            setSession(nextSession)
+            setUser(nextUser)
+            return
+          }
+
+          await hydrateUserState(nextSession, nextUser, { claimSession: event === 'SIGNED_IN' })
+        }
+
+        void refreshFlow()
+          .catch((error) => {
+            toast.error(toHumanErrorMessage(error, 'Unable to restore your authenticated session.'))
+            clearLocalAuthState()
+          })
+          .finally(() => {
+            if (shouldHydrate) {
+              setIsHydrating(false)
+            }
+          })
       }
     })
 
@@ -388,18 +487,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
     }, 300_000)
 
-    const visibilityHandler = () => {
-      if (document.visibilityState === 'visible') {
-        void runValidation()
-      }
-    }
-
-    document.addEventListener('visibilitychange', visibilityHandler)
-
     return () => {
       active = false
       window.clearInterval(intervalId)
-      document.removeEventListener('visibilitychange', visibilityHandler)
     }
   }, [session, user, validateCurrentSession])
 
@@ -424,7 +514,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
               ? null
               : ((payload.new as { session_token?: string } | null)?.session_token ?? null)
 
-          if (!token || token !== session.access_token) {
+          const localToken = latestTokenRef.current
+
+          if (!localToken) {
+            return
+          }
+
+          if (!token || token !== localToken) {
             void forceSignOutForSessionMismatch(user.id)
           }
         },
@@ -434,7 +530,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return () => {
       void supabase.removeChannel(channel)
     }
-  }, [forceSignOutForSessionMismatch, session, user])
+  }, [forceSignOutForSessionMismatch, user])
+
+  useEffect(() => {
+    latestTokenRef.current = session?.access_token ?? null
+  }, [session])
 
   const requiresOrganizationSelection = Boolean(user && roles.length > 1 && !activeContext)
 

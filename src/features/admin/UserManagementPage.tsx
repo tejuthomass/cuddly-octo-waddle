@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { createPortal } from 'react-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowDown, ArrowDownUp, ArrowUp, Eye, Filter, Power, PowerOff, Search, Trash2, UserPlus, X } from 'lucide-react'
+import { AlertTriangle, ArrowDown, ArrowDownUp, ArrowUp, CircleHelp, Eye, Filter, Pencil, Power, PowerOff, RefreshCw, Search, UserPlus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -20,6 +21,7 @@ import {
   useAdminUsers,
   useCreateAdminUser,
   useHardDeleteUser,
+  useResetAdminUserPassword,
   useToggleUserActive,
   useUpdateAdminUser,
 } from '@/hooks/useAdminUsers'
@@ -36,7 +38,7 @@ const roleOptions: { value: RoleCode; label: string }[] = [
   { value: 'L3', label: 'L3 Manager' },
   { value: 'L4', label: 'L4 Management' },
   { value: 'L5', label: 'L5 Admin' },
-  { value: 'CLIENT', label: 'Client User' },
+  { value: 'CLIENT', label: 'Client' },
 ]
 
 const roleFilterOptions: { value: 'ALL' | RoleCode; label: string }[] = [
@@ -57,8 +59,8 @@ const createSchema = z.object({
   countryCode: z.string().min(1, 'Country code is required.'),
   phoneLocal: z.string().min(6, 'Enter a valid local number.'),
   roleTitle: z.string().optional(),
-  companyId: z.string().optional(),
-  facilityId: z.string().optional(),
+  companyIds: z.array(z.string()).optional(),
+  facilityIds: z.array(z.string()).optional(),
 })
 
 const detailSchema = z.object({
@@ -68,8 +70,8 @@ const detailSchema = z.object({
   phoneLocal: z.string().min(6, 'Enter a valid local number.'),
   roleCode: z.enum(['L1', 'L2', 'L3', 'L4', 'L5', 'CLIENT']),
   roleTitle: z.string().min(2, 'Role title is required.'),
-  companyId: z.string().optional(),
-  facilityId: z.string().optional(),
+  companyIds: z.array(z.string()).optional(),
+  facilityIds: z.array(z.string()).optional(),
 })
 
 type CreateFormValues = z.infer<typeof createSchema>
@@ -81,11 +83,15 @@ const roleTitleByCode: Record<RoleCode, string> = {
   L3: 'Manager',
   L4: 'Management',
   L5: 'L5 Admin',
-  CLIENT: 'Client User',
+  CLIENT: 'Client',
 }
 
 function isGlobalRole(roleCode: RoleCode) {
   return roleCode === 'L4' || roleCode === 'L5'
+}
+
+function isScopedOpsRole(roleCode: RoleCode) {
+  return roleCode === 'L1' || roleCode === 'L2' || roleCode === 'L3'
 }
 
 function normalizePhone(countryCode: string, local: string) {
@@ -118,6 +124,65 @@ function RequiredMark() {
   return <span className="ml-1 text-destructive">*</span>
 }
 
+function ThemedHoverText({ text, className }: { text: string; className?: string }) {
+  const triggerRef = useRef<HTMLSpanElement | null>(null)
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState({ left: 0, top: 0 })
+
+  const updatePos = () => {
+    if (!triggerRef.current) return
+    const rect = triggerRef.current.getBoundingClientRect()
+    setPos({ left: rect.left + rect.width / 2, top: Math.max(8, rect.top - 8) })
+  }
+
+  useEffect(() => {
+    if (!open) return
+    updatePos()
+    const onWindowChange = () => updatePos()
+    window.addEventListener('resize', onWindowChange)
+    window.addEventListener('scroll', onWindowChange, true)
+    return () => {
+      window.removeEventListener('resize', onWindowChange)
+      window.removeEventListener('scroll', onWindowChange, true)
+    }
+  }, [open])
+
+  return (
+    <>
+      <span
+        ref={triggerRef}
+        className={className}
+        onMouseEnter={() => {
+          setOpen(true)
+          updatePos()
+        }}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => {
+          setOpen(true)
+          updatePos()
+        }}
+        onBlur={() => setOpen(false)}
+        tabIndex={0}
+      >
+        {text}
+      </span>
+
+      {open
+        ? createPortal(
+            <div
+              className="fixed z-[200] -translate-x-1/2 -translate-y-full rounded-md border border-border/80 bg-popover/95 px-2 py-1 text-xs text-popover-foreground shadow-lg backdrop-blur-sm"
+              style={{ left: pos.left, top: pos.top }}
+              role="tooltip"
+            >
+              {text}
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  )
+}
+
 type SortKey = 'user_id' | 'full_name' | 'role_code' | 'is_active' | 'created_at'
 type SortDirection = 'asc' | 'desc'
 
@@ -140,8 +205,9 @@ function roleBadgeClass(roleCode: RoleCode | null) {
 
 export default function UserManagementPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { user: currentUser } = useAuth()
-  const { data: users = [], isLoading } = useAdminUsers()
+  const { data: users = [], isLoading, isFetching, refetch } = useAdminUsers()
   const { data: companies = [] } = useCompanyOptions()
   const { data: facilities = [] } = useFacilityOptions()
 
@@ -149,6 +215,7 @@ export default function UserManagementPage() {
   const updateUserMutation = useUpdateAdminUser()
   const toggleUserMutation = useToggleUserActive()
   const hardDeleteUserMutation = useHardDeleteUser()
+  const resetPasswordMutation = useResetAdminUserPassword()
 
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState<'ALL' | RoleCode>('ALL')
@@ -173,7 +240,10 @@ export default function UserManagementPage() {
   const [userPage, setUserPage] = useState(1)
   const [userPageSize, setUserPageSize] = useState(10)
   const [pendingBulkAction, setPendingBulkAction] = useState<'activate' | 'deactivate' | null>(null)
+  const [pendingUserStatusAction, setPendingUserStatusAction] = useState<{ user: AdminUserRow; nextIsActive: boolean } | null>(null)
+  const [lastSelectedRowIndex, setLastSelectedRowIndex] = useState<number | null>(null)
   const lastSelfSelectToastAtRef = useRef(0)
+  const detailsPaneRef = useRef<HTMLElement | null>(null)
 
   const {
     register: registerCreate,
@@ -192,8 +262,8 @@ export default function UserManagementPage() {
       countryCode: detectPreferredDialCode(),
       phoneLocal: '',
       roleTitle: roleTitleByCode.L1,
-      companyId: '',
-      facilityId: '',
+      companyIds: [],
+      facilityIds: [],
     },
   })
 
@@ -213,21 +283,22 @@ export default function UserManagementPage() {
       phoneLocal: '',
       roleCode: 'L1',
       roleTitle: roleTitleByCode.L1,
-      companyId: '',
-      facilityId: '',
+      companyIds: [],
+      facilityIds: [],
     },
   })
 
   const createRoleCode = watchCreate('roleCode')
-  const createCompanyId = watchCreate('companyId')
   const createCountryCode = watchCreate('countryCode')
   const detailRoleCode = watchDetail('roleCode')
-  const detailCompanyId = watchDetail('companyId')
+  const detailCompanyIds = watchDetail('companyIds') ?? []
   const detailCountryCode = watchDetail('countryCode')
-  const detailFacilityId = watchDetail('facilityId')
+  const detailFacilityIds = watchDetail('facilityIds') ?? []
 
   const createRoleIsGlobal = isGlobalRole(createRoleCode)
   const detailRoleIsGlobal = isGlobalRole(detailRoleCode)
+  const createCanAssignSites = isScopedOpsRole(createRoleCode)
+  const detailCanAssignSites = isScopedOpsRole(detailRoleCode)
 
   const isSelfSelected = Boolean(selectedUser && currentUser?.id === selectedUser.id)
 
@@ -252,19 +323,29 @@ export default function UserManagementPage() {
 
   const oldValueHint = (field: keyof DetailFormValues) => {
     if (!isEditingDetails || !fieldChanged(field) || !detailSnapshot) return null
-    const oldValue = `${detailSnapshot[field] ?? ''}` || 'Not assigned'
+    const snapshotValue = detailSnapshot[field]
+    let oldValue = 'Not assigned'
+
+    if (Array.isArray(snapshotValue)) {
+      if (snapshotValue.length === 0) {
+        oldValue = 'Not assigned'
+      } else if (field === 'companyIds') {
+        oldValue = snapshotValue.map((id) => companyById.get(id) ?? id).join(', ')
+      } else if (field === 'facilityIds') {
+        oldValue = snapshotValue.map((id) => facilityById.get(id) ?? id).join(', ')
+      } else {
+        oldValue = snapshotValue.join(', ')
+      }
+    } else {
+      oldValue = `${snapshotValue ?? ''}` || 'Not assigned'
+    }
+
     return <p className="text-xs text-muted-foreground">Previous: {oldValue}</p>
   }
 
-  const createFacilityOptions = useMemo(() => {
-    if (!createCompanyId) return facilities
-    return facilities.filter((facility) => facility.companyId === createCompanyId)
-  }, [createCompanyId, facilities])
+  const createFacilityOptions = useMemo(() => facilities, [facilities])
 
-  const detailFacilityOptions = useMemo(() => {
-    if (!detailCompanyId) return facilities
-    return facilities.filter((facility) => facility.companyId === detailCompanyId)
-  }, [detailCompanyId, facilities])
+  const detailFacilityOptions = useMemo(() => facilities, [facilities])
 
   const companyById = useMemo(() => {
     const map = new Map<string, string>()
@@ -278,18 +359,80 @@ export default function UserManagementPage() {
     return map
   }, [facilities])
 
+  const companyIdByFacilityId = useMemo(() => {
+    const map = new Map<string, string>()
+    facilities.forEach((facility) => {
+      if (facility.companyId) {
+        map.set(facility.id, facility.companyId)
+      }
+    })
+    return map
+  }, [facilities])
+
+  const facilityIdsByCompanyId = useMemo(() => {
+    const map = new Map<string, string[]>()
+    facilities.forEach((facility) => {
+      if (!facility.companyId) return
+      const list = map.get(facility.companyId) ?? []
+      list.push(facility.id)
+      map.set(facility.companyId, list)
+    })
+    return map
+  }, [facilities])
+
+  const derivedAccountIdsByUserId = useMemo(() => {
+    const map = new Map<string, string[]>()
+
+    users.forEach((row) => {
+      const accountIds = new Set((row.company_ids ?? []).filter(Boolean))
+
+      if (isScopedOpsRole(row.role_code ?? 'CLIENT')) {
+        ;(row.facility_ids ?? []).forEach((facilityId) => {
+          const companyId = companyIdByFacilityId.get(facilityId)
+          if (companyId) {
+            accountIds.add(companyId)
+          }
+        })
+      }
+
+      map.set(row.id, Array.from(accountIds))
+    })
+
+    return map
+  }, [companyIdByFacilityId, users])
+
+  const derivedFacilityIdsByUserId = useMemo(() => {
+    const map = new Map<string, string[]>()
+
+    users.forEach((row) => {
+      const facilityIds = new Set((row.facility_ids ?? []).filter(Boolean))
+
+      if (row.role_code === 'CLIENT') {
+        const derivedAccountIds = derivedAccountIdsByUserId.get(row.id) ?? []
+        derivedAccountIds.forEach((companyId) => {
+          const companyFacilityIds = facilityIdsByCompanyId.get(companyId) ?? []
+          companyFacilityIds.forEach((facilityId) => facilityIds.add(facilityId))
+        })
+      }
+
+      map.set(row.id, Array.from(facilityIds))
+    })
+
+    return map
+  }, [derivedAccountIdsByUserId, facilityIdsByCompanyId, users])
+
   const companyFilterOptions = useMemo(
-    () => [{ value: 'ALL', label: 'All clients' }, ...companies.map((company) => ({ value: company.id, label: company.label }))],
+    () => [{ value: 'ALL', label: 'All accounts' }, ...companies.map((company) => ({ value: company.id, label: company.label }))],
     [companies],
   )
 
   const facilityFilterOptions = useMemo(() => {
     if (companyFilter === 'ALL') {
-      return [{ value: 'ALL', label: 'All facilities' }]
+      return [{ value: 'ALL', label: 'Select account first' }]
     }
 
     return [
-      { value: 'ALL', label: 'All facilities' },
+      { value: 'ALL', label: 'All sites' },
       ...facilities
         .filter((facility) => facility.companyId === companyFilter)
         .map((facility) => ({ value: facility.id, label: facility.label })),
@@ -305,21 +448,40 @@ export default function UserManagementPage() {
 
   const filteredUsers = useMemo(() => {
     const query = search.trim().toLowerCase()
+    const selectedFacilityCompanyId = facilityFilter === 'ALL' ? null : (companyIdByFacilityId.get(facilityFilter) ?? null)
 
     return users.filter((row) => {
+      const derivedAccountIds = derivedAccountIdsByUserId.get(row.id) ?? []
+      const derivedFacilityIds = derivedFacilityIdsByUserId.get(row.id) ?? []
+      const hasScopeFilter = companyFilter !== 'ALL' || facilityFilter !== 'ALL'
+
       if (roleFilter !== 'ALL' && row.role_code !== roleFilter) return false
       if (statusFilter === 'ACTIVE' && !row.is_active) return false
       if (statusFilter === 'INACTIVE' && row.is_active) return false
-      if (companyFilter !== 'ALL' && row.company_id !== companyFilter) return false
-      if (facilityFilter !== 'ALL' && row.facility_id !== facilityFilter) return false
+      if (hasScopeFilter && (row.role_code === 'L4' || row.role_code === 'L5')) return false
+      if (companyFilter !== 'ALL' && !derivedAccountIds.includes(companyFilter)) return false
+
+      if (facilityFilter !== 'ALL') {
+        const hasDirectOrDerivedFacility = derivedFacilityIds.includes(facilityFilter)
+        const hasMappedAccountFromSelectedSite = Boolean(selectedFacilityCompanyId && derivedAccountIds.includes(selectedFacilityCompanyId))
+
+        if (!hasDirectOrDerivedFacility && !hasMappedAccountFromSelectedSite) {
+          return false
+        }
+      }
+
       if (!query) return true
 
-      return [row.user_id, row.full_name, row.email, row.phone ?? '', row.role_title ?? '', row.role_code ?? '']
+      const companyText = derivedAccountIds.map((id) => companyById.get(id) ?? id).join(' ')
+      const facilityText = derivedFacilityIds.map((id) => facilityById.get(id) ?? id).join(' ')
+      const statusText = row.is_active ? 'active' : 'inactive'
+
+      return [row.user_id, row.full_name, row.email, row.phone ?? '', row.role_title ?? '', row.role_code ?? '', companyText, facilityText, statusText]
         .join(' ')
         .toLowerCase()
         .includes(query)
     })
-  }, [companyFilter, facilityFilter, roleFilter, search, statusFilter, users])
+  }, [companyById, companyFilter, companyIdByFacilityId, derivedAccountIdsByUserId, derivedFacilityIdsByUserId, facilityById, facilityFilter, roleFilter, search, statusFilter, users])
 
   const sortedUsers = useMemo(() => {
     const rows = [...filteredUsers]
@@ -374,6 +536,43 @@ export default function UserManagementPage() {
     setSelectedUserIds((prev) => (prev.includes(rowId) ? prev.filter((id) => id !== rowId) : [...prev, rowId]))
   }
 
+  const onSelectUserRow = (rowId: string, options: { shift: boolean; multi: boolean }) => {
+    if (rowId === currentUser?.id) {
+      notifySelfSelectionBlocked()
+      return
+    }
+
+    const selectableRows = pagedUsers.filter((row) => row.id !== currentUser?.id)
+    const selectableIndex = selectableRows.findIndex((row) => row.id === rowId)
+
+    if (selectableIndex === -1) {
+      return
+    }
+
+    if (options.shift && lastSelectedRowIndex !== null) {
+      const start = Math.min(lastSelectedRowIndex, selectableIndex)
+      const end = Math.max(lastSelectedRowIndex, selectableIndex)
+      const rangeIds = selectableRows.slice(start, end + 1).map((row) => row.id)
+
+      setSelectedUserIds((prev) => {
+        if (options.multi) {
+          return Array.from(new Set([...prev, ...rangeIds]))
+        }
+        return rangeIds
+      })
+      return
+    }
+
+    if (options.multi) {
+      toggleUserSelection(rowId)
+      setLastSelectedRowIndex(selectableIndex)
+      return
+    }
+
+    setSelectedUserIds([rowId])
+    setLastSelectedRowIndex(selectableIndex)
+  }
+
   const selectedUsers = useMemo(
     () => sortedUsers.filter((row) => selectedUserIds.includes(row.id)),
     [selectedUserIds, sortedUsers],
@@ -404,6 +603,13 @@ export default function UserManagementPage() {
     setSelectedUserIds(filteredIds)
   }
 
+  const summarizeAssignments = (ids: string[], labelById: Map<string, string>, fallback: string) => {
+    if (ids.length === 0) return '-'
+    const labels = ids.map((id) => labelById.get(id) ?? fallback)
+    if (labels.length <= 2) return labels.join(', ')
+    return `${labels.slice(0, 2).join(', ')} +${labels.length - 2}`
+  }
+
   const onBulkToggleUsers = async (isActive: boolean) => {
     const targets = selectedUsers.filter((row) => !(currentUser?.id === row.id && !isActive))
     if (targets.length === 0) {
@@ -430,27 +636,38 @@ export default function UserManagementPage() {
   }
 
   const onConfirmBulkAction = async () => {
-    if (!pendingBulkAction) return
+    if (!pendingBulkAction || toggleUserMutation.isPending) return
     await onBulkToggleUsers(pendingBulkAction === 'activate')
     setPendingBulkAction(null)
+    await refetch()
   }
 
-  const detailReadOnlyClass = !isEditingDetails ? 'cursor-not-allowed opacity-70' : ''
+  const detailReadOnlyClass = !isEditingDetails ? 'cursor-not-allowed opacity-70 pointer-events-none focus-visible:ring-0' : ''
 
-  const companyOptions = useMemo(
-    () => [{ value: '', label: 'Not assigned' }, ...companies.map((company) => ({ value: company.id, label: company.label }))],
+  const accountOptions = useMemo(
+    () => companies.map((company) => ({ value: company.id, label: company.label })),
     [companies],
   )
 
-  const createFacilitySelectOptions = useMemo(
-    () => [{ value: '', label: 'Not assigned' }, ...createFacilityOptions.map((facility) => ({ value: facility.id, label: facility.label }))],
-    [createFacilityOptions],
+  const createSiteSelectOptions = useMemo(
+    () => createFacilityOptions.map((facility) => ({
+      value: facility.id,
+      label: `${facility.label} - ${companyById.get(facility.companyId ?? '') ?? 'Unknown account'}`,
+      searchText: `${facility.id} ${facility.label} ${companyById.get(facility.companyId ?? '') ?? ''}`,
+    })),
+    [companyById, createFacilityOptions],
   )
 
-  const detailFacilitySelectOptions = useMemo(
-    () => [{ value: '', label: 'Not assigned' }, ...detailFacilityOptions.map((facility) => ({ value: facility.id, label: facility.label }))],
-    [detailFacilityOptions],
+  const detailSiteSelectOptions = useMemo(
+    () => detailFacilityOptions.map((facility) => ({
+      value: facility.id,
+      label: `${facility.label} - ${companyById.get(facility.companyId ?? '') ?? 'Unknown account'}`,
+      searchText: `${facility.id} ${facility.label} ${companyById.get(facility.companyId ?? '') ?? ''}`,
+    })),
+    [companyById, detailFacilityOptions],
   )
+
+  const removeOne = (source: string[], value: string) => source.filter((item) => item !== value)
 
   const closeCreateModal = () => {
     setIsCreateOpen(false)
@@ -462,8 +679,8 @@ export default function UserManagementPage() {
       countryCode: detectPreferredDialCode(),
       phoneLocal: '',
       roleTitle: roleTitleByCode.L1,
-      companyId: '',
-      facilityId: '',
+      companyIds: [],
+      facilityIds: [],
     })
   }
 
@@ -509,8 +726,8 @@ export default function UserManagementPage() {
         phone,
         roleCode: values.roleCode,
         roleTitle: values.roleTitle,
-        companyId: createRoleIsGlobal ? undefined : values.companyId || undefined,
-        facilityId: createRoleIsGlobal ? undefined : values.facilityId || undefined,
+        companyIds: values.roleCode === 'CLIENT' ? (values.companyIds ?? []) : [],
+        facilityIds: isScopedOpsRole(values.roleCode) ? (values.facilityIds ?? []) : [],
       })
       toast.success('User created successfully. Initial password is set to phone number.')
       closeCreateModal()
@@ -529,8 +746,8 @@ export default function UserManagementPage() {
       phoneLocal: split.phoneLocal,
       roleCode: row.role_code ?? 'L1',
       roleTitle: row.role_title ?? roleTitleByCode[row.role_code ?? 'L1'],
-      companyId: row.company_id ?? '',
-      facilityId: row.facility_id ?? '',
+      companyIds: row.company_ids ?? (row.company_id ? [row.company_id] : []),
+      facilityIds: row.facility_ids ?? (row.facility_id ? [row.facility_id] : []),
     }
 
     resetDetail(nextValues)
@@ -549,14 +766,14 @@ export default function UserManagementPage() {
         phone,
         roleCode: values.roleCode,
         roleTitle: values.roleTitle,
-        companyId: detailRoleIsGlobal ? undefined : values.companyId || undefined,
-        facilityId: detailRoleIsGlobal ? undefined : values.facilityId || undefined,
+        companyIds: values.roleCode === 'CLIENT' ? (values.companyIds ?? []) : [],
+        facilityIds: isScopedOpsRole(values.roleCode) ? (values.facilityIds ?? []) : [],
       })
       toast.success('User updated.')
       const nextSnapshot: DetailFormValues = {
         ...values,
-        companyId: values.companyId ?? '',
-        facilityId: values.facilityId ?? '',
+        companyIds: values.companyIds ?? [],
+        facilityIds: values.facilityIds ?? [],
       }
       setDetailSnapshot(nextSnapshot)
       resetDetail(nextSnapshot)
@@ -598,25 +815,44 @@ export default function UserManagementPage() {
     setIsEditingDetails(false)
   }
 
-  const onToggleUser = async () => {
-    if (!selectedUser) return
+  const onOpenUserStatusConfirm = (row: AdminUserRow, nextIsActive: boolean) => {
+    if (toggleUserMutation.isPending) return
+
+    if (!nextIsActive && currentUser?.id === row.id) {
+      toast.error('You cannot deactivate your own account.')
+      return
+    }
+
+    setPendingUserStatusAction({ user: row, nextIsActive })
+  }
+
+  const onConfirmUserStatusAction = async () => {
+    if (!pendingUserStatusAction || toggleUserMutation.isPending) return
+
+    const { user, nextIsActive } = pendingUserStatusAction
+
     try {
-      await toggleUserMutation.mutateAsync({ userId: selectedUser.id, isActive: !selectedUser.is_active })
-      setSelectedUser((prev) => (prev ? { ...prev, is_active: !prev.is_active } : prev))
-      toast.success(!selectedUser.is_active ? 'User activated.' : 'User deactivated.')
+      await toggleUserMutation.mutateAsync({ userId: user.id, isActive: nextIsActive })
+      setSelectedUser((prev) => (prev && prev.id === user.id ? { ...prev, is_active: nextIsActive } : prev))
+      await refetch()
+      toast.success(nextIsActive ? 'User activated.' : 'User deactivated.')
+      setPendingUserStatusAction(null)
     } catch (error) {
       toast.error(toHumanErrorMessage(error, 'Unable to update user status.'))
     }
   }
 
-  const onToggleUserInline = async (row: AdminUserRow) => {
-    if (currentUser?.id === row.id) return
+  const onResetPasswordToPhone = async (row: AdminUserRow) => {
     try {
-      await toggleUserMutation.mutateAsync({ userId: row.id, isActive: !row.is_active })
-      toast.success(!row.is_active ? 'User activated.' : 'User deactivated.')
+      await resetPasswordMutation.mutateAsync({ userId: row.id })
+      toast.success('Password reset to the user phone number.')
     } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to update user status.'))
+      toast.error(toHumanErrorMessage(error, 'Unable to reset password for this user.'))
     }
+  }
+
+  const onToggleUserInline = (row: AdminUserRow) => {
+    onOpenUserStatusConfirm(row, !row.is_active)
   }
 
   const onHardDelete = async () => {
@@ -639,12 +875,6 @@ export default function UserManagementPage() {
     } catch (error) {
       toast.error(toHumanErrorMessage(error, 'Unable to permanently delete user.'))
     }
-  }
-
-  const openDeleteConfirm = (row: AdminUserRow) => {
-    setDeleteTargetUser(row)
-    setDeleteConfirmInput('')
-    setIsDeleteConfirmOpen(true)
   }
 
   const sortIcon = (key: SortKey) => {
@@ -677,31 +907,81 @@ export default function UserManagementPage() {
     setSelectedUserIds((prev) => prev.filter((id) => id !== currentUser?.id && sortedUsers.some((row) => row.id === id)))
   }, [currentUser?.id, sortedUsers])
 
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const targetUserId = params.get('userId')
+    if (!targetUserId) return
+
+    const row = users.find((item) => item.id === targetUserId)
+    if (!row) return
+
+    openUserDetails(row)
+    params.delete('userId')
+    navigate({ pathname: location.pathname, search: params.toString() ? `?${params.toString()}` : '' }, { replace: true })
+  }, [location.pathname, location.search, navigate, users])
+
+  useEffect(() => {
+    if (!selectedUser) {
+      return
+    }
+
+    const previousBodyOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow
+    }
+  }, [selectedUser])
+
   return (
     <main className="space-y-6 p-6">
       <Card>
-        <CardHeader>
+        <CardHeader className="sticky top-0 z-20 border-b border-border/70 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <CardTitle className="text-2xl tracking-tight">Users</CardTitle>
-              <CardDescription>Create, filter, sort.</CardDescription>
+              <CardDescription>Create, search, filter, sort, assign.</CardDescription>
             </div>
-            <Button className="inline-flex h-9 items-center justify-center gap-2 px-3" onClick={openCreateModal}>
-              <UserPlus className="h-4 w-4" />
-              Add
-            </Button>
+            <div className="ml-auto flex items-center gap-2">
+              <TooltipIconButton className="h-9 w-9" onClick={openCreateModal} tooltip="Add user" aria-label="Add user">
+                <UserPlus className="h-4 w-4" />
+              </TooltipIconButton>
+              <TooltipIconButton
+                className="h-9 w-9"
+                onClick={() => {
+                  void refetch()
+                }}
+                tooltip="Refresh"
+                aria-label="Refresh"
+              >
+                <RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+              </TooltipIconButton>
+            </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 pt-4">
           <div className="flex flex-wrap items-center gap-3">
             <div className="relative min-w-[280px] flex-1">
               <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
-              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by id, name, email, phone" className="pl-9" />
+              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search users" className="pl-9 pr-10" />
+              <div className="absolute right-2 top-1.5">
+                <TooltipIconButton
+                  className="h-7 w-7 border-transparent"
+                  tooltip="Search by ID, name, email, phone, role, status, account, or site."
+                  aria-label="Search help"
+                >
+                  <CircleHelp className="h-4 w-4" />
+                </TooltipIconButton>
+              </div>
             </div>
-            <Button variant="outline" className="h-9 px-3" onClick={() => setIsFilterOpen((p) => !p)}>
-              <Filter className="mr-2 h-4 w-4" />
-              Filters
-            </Button>
+            <TooltipIconButton
+              className={`h-9 w-9 ${isFilterOpen ? 'border-ring/60 bg-muted/60 text-foreground' : ''}`}
+              onClick={() => setIsFilterOpen((p) => !p)}
+              tooltip="Filters"
+              aria-label="Filters"
+            >
+              <Filter className="h-4 w-4" />
+            </TooltipIconButton>
           </div>
 
           {isFilterOpen ? (
@@ -725,7 +1005,7 @@ export default function UserManagementPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="companyFilter">Client</Label>
+                <Label htmlFor="companyFilter">Account</Label>
                 <SearchableSelect
                   value={companyFilter}
                   onChange={(value) => {
@@ -733,16 +1013,16 @@ export default function UserManagementPage() {
                     setFacilityFilter('ALL')
                   }}
                   options={companyFilterOptions}
-                  placeholder="All clients"
+                  placeholder="All accounts"
                 />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="facilityFilter">Facility</Label>
+                <Label htmlFor="facilityFilter">Site</Label>
                 <SearchableSelect
                   value={facilityFilter}
                   onChange={(value) => setFacilityFilter(value)}
                   options={facilityFilterOptions}
-                  placeholder="All facilities"
+                  placeholder={companyFilter === 'ALL' ? 'Select account' : 'All sites'}
                   disabled={companyFilter === 'ALL'}
                 />
               </div>
@@ -752,33 +1032,44 @@ export default function UserManagementPage() {
             </div>
           ) : null}
 
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/10 p-2.5">
-            <p className="px-1 text-sm text-muted-foreground">{selectedUsers.length} selected</p>
-            <div className="flex items-center gap-1.5">
-              <TooltipIconButton onClick={() => onOpenBulkActionConfirm(true)} disabled={selectedUsers.length === 0} tooltip="Activate selected users" aria-label="Activate selected users">
-                <Power className="h-4 w-4" />
-              </TooltipIconButton>
-              <TooltipIconButton onClick={() => onOpenBulkActionConfirm(false)} disabled={selectedUsers.length === 0} tooltip="Deactivate selected users" aria-label="Deactivate selected users">
-                <PowerOff className="h-4 w-4" />
-              </TooltipIconButton>
-            </div>
-          </div>
-
-          {canSelectFiltered ? (
-            <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-              All {pageUserIds.length} users on this page are selected.
-              <Button type="button" variant="link" className="h-auto px-1 text-sm" onClick={onSelectFilteredUsers}>
-                Select all {eligibleFilteredUsers.length} users
-              </Button>
-            </div>
-          ) : null}
-
-          {allFilteredSelected && selectedUserIds.length > 0 ? (
-            <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-              All {eligibleFilteredUsers.length} users are selected.
-              <Button type="button" variant="link" className="h-auto px-1 text-sm" onClick={() => setSelectedUserIds([])}>
-                Clear selection
-              </Button>
+          {selectedUsers.length > 0 ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/10 p-2.5">
+              <div className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
+                <span>{allFilteredSelected ? `All ${eligibleFilteredUsers.length} selected` : `${selectedUsers.length} selected`}</span>
+                {canSelectFiltered ? (
+                  <Button type="button" variant="link" className="h-auto px-1 text-sm" onClick={onSelectFilteredUsers}>
+                    Select all {eligibleFilteredUsers.length}
+                  </Button>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <TooltipIconButton
+                  onClick={() => {
+                    setSelectedUserIds([])
+                    setLastSelectedRowIndex(null)
+                  }}
+                  tooltip="Clear selection"
+                  aria-label="Clear selection"
+                >
+                  <X className="h-4 w-4" />
+                </TooltipIconButton>
+                <TooltipIconButton
+                  onClick={() => onOpenBulkActionConfirm(true)}
+                  tooltip="Activate selected users"
+                  aria-label="Activate selected users"
+                  disabled={toggleUserMutation.isPending}
+                >
+                  <Power className="h-4 w-4" />
+                </TooltipIconButton>
+                <TooltipIconButton
+                  onClick={() => onOpenBulkActionConfirm(false)}
+                  tooltip="Deactivate selected users"
+                  aria-label="Deactivate selected users"
+                  disabled={toggleUserMutation.isPending}
+                >
+                  <PowerOff className="h-4 w-4" />
+                </TooltipIconButton>
+              </div>
             </div>
           ) : null}
 
@@ -786,7 +1077,7 @@ export default function UserManagementPage() {
             <p className="text-sm text-muted-foreground">Loading users...</p>
           ) : (
             <div className="overflow-x-auto rounded-md border border-border/70">
-              <table className="w-full text-sm">
+              <table className="w-full table-fixed text-sm">
                 <thead>
                   <tr className="border-b bg-muted/40">
                     <th className="w-12 p-3 align-middle text-left" aria-label="Select rows">
@@ -806,43 +1097,43 @@ export default function UserManagementPage() {
                         />
                       </button>
                     </th>
-                    <th className="p-3 text-left">
+                    <th className="w-[180px] p-3 text-left">
                       <button type="button" onClick={() => onSort('user_id')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'user_id' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         User ID
                         {sortIcon('user_id')}
                       </button>
                     </th>
-                    <th className="p-3 text-left">
+                    <th className="w-[220px] p-3 text-left">
                       <button type="button" onClick={() => onSort('full_name')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'full_name' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         Name
                         {sortIcon('full_name')}
                       </button>
                     </th>
-                    <th className="p-3 text-left">
+                    <th className="w-[100px] p-3 text-left">
                       <button type="button" onClick={() => onSort('role_code')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'role_code' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         Type
                         {sortIcon('role_code')}
                       </button>
                     </th>
-                    <th className="p-3 text-left">
+                    <th className="w-[100px] p-3 text-left">
                       <button type="button" onClick={() => onSort('is_active')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'is_active' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         Status
                         {sortIcon('is_active')}
                       </button>
                     </th>
-                    <th className="p-3 text-left">
-                      <span className="font-medium text-muted-foreground">Client</span>
+                    <th className="w-[320px] p-3 text-left">
+                      <span className="font-medium text-muted-foreground">Account</span>
                     </th>
-                    <th className="p-3 text-left">
-                      <span className="font-medium text-muted-foreground">Facility</span>
+                    <th className="w-[220px] p-3 text-left">
+                      <span className="font-medium text-muted-foreground">Site</span>
                     </th>
-                    <th className="p-3 text-left">
+                    <th className="w-[240px] p-3 text-left">
                       <button type="button" onClick={() => onSort('created_at')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'created_at' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         Created
                         {sortIcon('created_at')}
                       </button>
                     </th>
-                    <th className="w-[120px] p-3 text-left" aria-label="Actions" />
+                    <th className="w-[96px] p-3 text-left" aria-label="Actions" />
                   </tr>
                 </thead>
                 <tbody>
@@ -851,11 +1142,14 @@ export default function UserManagementPage() {
                       key={row.id}
                       onDoubleClick={() => openUserDetails(row)}
                       onClick={(event) => {
-                        if (event.ctrlKey || event.metaKey) {
-                          toggleUserSelection(row.id)
+                        if (event.shiftKey || event.ctrlKey || event.metaKey) {
+                          onSelectUserRow(row.id, { shift: event.shiftKey, multi: event.ctrlKey || event.metaKey })
+                          return
                         }
+
+                        openUserDetails(row)
                       }}
-                      className="group border-b transition-colors hover:bg-muted/20"
+                      className={`group border-b transition-colors ${selectedUserIds.includes(row.id) ? 'bg-muted/25 ring-1 ring-inset ring-border/70' : 'hover:bg-muted/20'}`}
                     >
                       <td className="w-12 p-3 align-middle">
                         <div className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50">
@@ -881,8 +1175,10 @@ export default function UserManagementPage() {
                           )}
                         </div>
                       </td>
-                      <td className="p-3 text-sm">{row.user_id}</td>
-                      <td className="p-3">
+                      <td className="p-3 text-sm">
+                        <ThemedHoverText text={row.user_id} className="block truncate" />
+                      </td>
+                      <td className="p-3" title={row.full_name || 'Unnamed user'}>
                         <span className="inline-flex items-center gap-2">
                           {row.avatar_url ? (
                             <img src={row.avatar_url} alt={row.full_name || row.user_id} className="h-6 w-6 rounded-full border border-border object-cover" />
@@ -891,7 +1187,7 @@ export default function UserManagementPage() {
                               {(row.full_name || row.user_id).slice(0, 1).toUpperCase()}
                             </span>
                           )}
-                          <span>{row.full_name || 'Unnamed user'}</span>
+                          <span className="truncate">{row.full_name || 'Unnamed user'}</span>
                           {currentUser?.id === row.id ? (
                             <span className="inline-flex rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">You</span>
                           ) : null}
@@ -903,9 +1199,25 @@ export default function UserManagementPage() {
                         </span>
                       </td>
                       <td className="p-3">{row.is_active ? 'Active' : 'Inactive'}</td>
-                      <td className="p-3 text-muted-foreground">{row.company_id ? (companyById.get(row.company_id) ?? 'Unknown client') : '-'}</td>
-                      <td className="p-3 text-muted-foreground">{row.facility_id ? (facilityById.get(row.facility_id) ?? 'Unknown facility') : '-'}</td>
-                      <td className="p-3 text-muted-foreground">{new Date(row.created_at).toLocaleString()}</td>
+                      <td
+                        className="p-3 text-muted-foreground"
+                      >
+                        <ThemedHoverText
+                          text={(derivedAccountIdsByUserId.get(row.id) ?? []).map((id) => companyById.get(id) ?? 'Unknown account').join(', ') || '-'}
+                          className="block truncate"
+                        />
+                      </td>
+                      <td
+                        className="p-3 text-muted-foreground"
+                      >
+                        <ThemedHoverText
+                          text={(derivedFacilityIdsByUserId.get(row.id) ?? []).map((id) => facilityById.get(id) ?? 'Unknown site').join(', ') || '-'}
+                          className="block truncate"
+                        />
+                      </td>
+                      <td className="p-3 text-muted-foreground">
+                        <ThemedHoverText text={new Date(row.created_at).toLocaleString()} className="block truncate" />
+                      </td>
                       <td className="p-3">
                         <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
                           <TooltipIconButton
@@ -925,25 +1237,14 @@ export default function UserManagementPage() {
                               <TooltipIconButton
                                 onClick={(event) => {
                                   event.stopPropagation()
-                                  void onToggleUserInline(row)
+                                  onToggleUserInline(row)
                                 }}
                                 className="h-8 w-8"
                                 tooltip={row.is_active ? 'Deactivate user' : 'Activate user'}
                                 aria-label={row.is_active ? 'Deactivate user' : 'Activate user'}
+                                disabled={toggleUserMutation.isPending}
                               >
-                                <Power className="h-4 w-4" />
-                              </TooltipIconButton>
-
-                              <TooltipIconButton
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  openDeleteConfirm(row)
-                                }}
-                                className="h-8 w-8 hover:text-destructive"
-                                tooltip="Delete user"
-                                aria-label="Delete user"
-                              >
-                                <Trash2 className="h-4 w-4" />
+                                {row.is_active ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
                               </TooltipIconButton>
                             </>
                           ) : null}
@@ -1007,6 +1308,14 @@ export default function UserManagementPage() {
                           const next = value as RoleCode
                           setCreateValue('roleCode', next, { shouldValidate: true })
                           setCreateValue('roleTitle', roleTitleByCode[next])
+                          if (isGlobalRole(next)) {
+                            setCreateValue('companyIds', [])
+                            setCreateValue('facilityIds', [])
+                          } else if (next === 'CLIENT') {
+                            setCreateValue('facilityIds', [])
+                          } else {
+                            setCreateValue('companyIds', [])
+                          }
                         }}
                         options={roleOptions}
                       />
@@ -1048,26 +1357,79 @@ export default function UserManagementPage() {
                     </div>
                     {!createRoleIsGlobal ? (
                       <>
-                        <div className="space-y-2">
-                          <Label htmlFor="create-companyId">Company</Label>
-                          <SearchableSelect
-                            value={createCompanyId ?? ''}
-                            onChange={(value) => setCreateValue('companyId', value, { shouldDirty: true })}
-                            options={companyOptions}
-                            placeholder="Not assigned"
-                            searchPlaceholder="Search company"
-                          />
+                        {createRoleCode === 'CLIENT' ? (
+                          <div className="space-y-2 md:col-span-2">
+                            <Label htmlFor="create-companyIds">Accounts</Label>
+                            <div className="w-full">
+                              <SearchableSelect
+                                value=""
+                                values={watchCreate('companyIds') ?? []}
+                                onChange={() => undefined}
+                                onValuesChange={(next) => setCreateValue('companyIds', next, { shouldDirty: true })}
+                                options={accountOptions}
+                                placeholder=""
+                                searchPlaceholder="Search account"
+                                multiSelect
+                                wrapOptions
+                              />
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {(watchCreate('companyIds') ?? []).length > 0 ? (
+                                (watchCreate('companyIds') ?? []).map((id) => (
+                                  <span key={id} className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/30 px-2 py-1 text-xs">
+                                    {companyById.get(id) ?? id}
+                                    <button
+                                      type="button"
+                                      onClick={() => setCreateValue('companyIds', removeOne(watchCreate('companyIds') ?? [], id), { shouldDirty: true })}
+                                      aria-label="Remove account"
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </span>
+                                ))
+                              ) : (
+                                <p className="text-xs text-muted-foreground">No account assigned.</p>
+                              )}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {createCanAssignSites ? (
+                        <div className="space-y-2 md:col-span-2">
+                          <Label htmlFor="create-facilityIds">Sites</Label>
+                          <div className="w-full">
+                            <SearchableSelect
+                              value=""
+                              values={watchCreate('facilityIds') ?? []}
+                              onChange={() => undefined}
+                              onValuesChange={(next) => setCreateValue('facilityIds', next, { shouldDirty: true })}
+                              options={createSiteSelectOptions}
+                              placeholder=""
+                              searchPlaceholder="Search site"
+                              multiSelect
+                              wrapOptions
+                            />
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {(watchCreate('facilityIds') ?? []).length > 0 ? (
+                              (watchCreate('facilityIds') ?? []).map((id) => (
+                                <span key={id} className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/30 px-2 py-1 text-xs">
+                                  {facilityById.get(id) ?? id}
+                                  <button
+                                    type="button"
+                                    onClick={() => setCreateValue('facilityIds', removeOne(watchCreate('facilityIds') ?? [], id), { shouldDirty: true })}
+                                    aria-label="Remove site"
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                </span>
+                              ))
+                            ) : (
+                              <p className="text-xs text-muted-foreground">No site assigned.</p>
+                            )}
+                          </div>
                         </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="create-facilityId">Facility</Label>
-                          <SearchableSelect
-                            value={watchCreate('facilityId') ?? ''}
-                            onChange={(value) => setCreateValue('facilityId', value, { shouldDirty: true })}
-                            options={createFacilitySelectOptions}
-                            placeholder="Not assigned"
-                            searchPlaceholder="Search facility"
-                          />
-                        </div>
+                        ) : null}
                       </>
                     ) : (
                       <p className="text-sm text-muted-foreground md:col-span-2">L4/L5 are global users; scope fields are hidden.</p>
@@ -1092,8 +1454,9 @@ export default function UserManagementPage() {
 
       {selectedUser ? (
         <div className="fixed inset-0 z-50 flex justify-end bg-black/35" onClick={onAttemptCloseDetails}>
-          <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-border/70 bg-background p-6" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-6 flex items-start justify-between gap-4">
+          <aside ref={detailsPaneRef} className="flex h-full w-full max-w-xl flex-col border-l border-border/70 bg-background" onClick={(e) => e.stopPropagation()}>
+            <div className="sticky top-0 z-10 border-b border-border/70 bg-background px-6 pb-4 pt-6">
+              <div className="flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-lg font-semibold">User Details</h2>
                 <p className="text-sm text-muted-foreground">View metadata and update editable fields.</p>
@@ -1112,22 +1475,33 @@ export default function UserManagementPage() {
                       setIsEditingDetails(false)
                     }}
                   >
-                    Cancel Edit
+                    Cancel
                   </Button>
                 ) : (
-                  <Button variant="outline" className="h-9 px-3" type="button" onClick={() => setIsEditingDetails(true)}>
-                    Edit
-                  </Button>
+                  <TooltipIconButton className="h-8 w-8" type="button" onClick={() => setIsEditingDetails(true)} tooltip="Edit user details" aria-label="Edit user details">
+                    <Pencil className="h-4 w-4" />
+                  </TooltipIconButton>
                 )}
-                <Button variant="outline" size="icon" onClick={onAttemptCloseDetails} aria-label="Close">
+                <Button variant="outline" size="icon" className="h-8 w-8" onClick={onAttemptCloseDetails} aria-label="Close">
                   <X className="h-4 w-4" />
                 </Button>
               </div>
             </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 pt-4">
             <div className="mb-6 grid gap-3 rounded-md border border-border/70 bg-muted/30 p-4 text-sm">
               <div><span className="text-muted-foreground">User ID:</span> <span className="font-medium">{selectedUser.user_id}</span></div>
               <div><span className="text-muted-foreground">Created At:</span> {new Date(selectedUser.created_at).toLocaleString()}</div>
               <div><span className="text-muted-foreground">Status:</span> {selectedUser.is_active ? 'Active' : 'Inactive'}</div>
+              <div>
+                <span className="text-muted-foreground">Accounts:</span>{' '}
+                {summarizeAssignments(derivedAccountIdsByUserId.get(selectedUser.id) ?? [], companyById, 'Unknown account')}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Sites:</span>{' '}
+                {summarizeAssignments(derivedFacilityIdsByUserId.get(selectedUser.id) ?? [], facilityById, 'Unknown site')}
+              </div>
             </div>
             <div className="mb-6 rounded-md border border-border/70 p-4">
               <p className="mb-3 text-sm font-medium">Profile Photo</p>
@@ -1142,7 +1516,7 @@ export default function UserManagementPage() {
 
                 {isSelfSelected ? (
                   <Button type="button" variant="outline" className="h-9 px-3" onClick={() => navigate('/settings')}>
-                    Manage In Settings
+                    Manage
                   </Button>
                 ) : (
                   <p className="text-xs text-muted-foreground">Only this user can change their photo in their own profile settings.</p>
@@ -1194,8 +1568,12 @@ export default function UserManagementPage() {
                       setDetailValue('roleCode', next, { shouldValidate: true })
                       setDetailValue('roleTitle', roleTitleByCode[next])
                       if (isGlobalRole(next)) {
-                        setDetailValue('companyId', '')
-                        setDetailValue('facilityId', '')
+                        setDetailValue('companyIds', [])
+                        setDetailValue('facilityIds', [])
+                      } else if (next === 'CLIENT') {
+                        setDetailValue('facilityIds', [])
+                      } else {
+                        setDetailValue('companyIds', [])
                       }
                     }}
                     className={detailReadOnlyClass}
@@ -1212,39 +1590,96 @@ export default function UserManagementPage() {
                 </div>
               </div>
               {!detailRoleIsGlobal ? (
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-4">
+                  {detailRoleCode === 'CLIENT' ? (
+                    <div className="space-y-2">
+                      <Label htmlFor="detail-companyIds">Accounts</Label>
+                      <div className="w-full">
+                        <SearchableSelect
+                          value=""
+                          values={detailCompanyIds ?? []}
+                          onChange={() => undefined}
+                          onValuesChange={(next) => {
+                            if (!isEditingDetails) return
+                            setDetailValue('companyIds', next, { shouldDirty: true })
+                          }}
+                          options={accountOptions}
+                          className={detailReadOnlyClass}
+                          placeholder=""
+                          searchPlaceholder="Search account"
+                          disabled={!isEditingDetails}
+                          multiSelect
+                          wrapOptions
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {(detailCompanyIds ?? []).length > 0 ? (
+                          (detailCompanyIds ?? []).map((id) => (
+                            <span key={id} className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/30 px-2 py-1 text-xs">
+                              {companyById.get(id) ?? id}
+                              {isEditingDetails ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setDetailValue('companyIds', removeOne(detailCompanyIds ?? [], id), { shouldDirty: true })}
+                                  aria-label="Remove account"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              ) : null}
+                            </span>
+                          ))
+                        ) : (
+                          <p className="text-xs text-muted-foreground">No account assigned.</p>
+                        )}
+                      </div>
+                      {oldValueHint('companyIds')}
+                    </div>
+                  ) : null}
+
+                  {detailCanAssignSites ? (
                   <div className="space-y-2">
-                    <Label htmlFor="detail-companyId">Company</Label>
-                    <SearchableSelect
-                      value={detailCompanyId ?? ''}
-                      onChange={(value) => {
-                        if (!isEditingDetails) return
-                        setDetailValue('companyId', value, { shouldDirty: true })
-                      }}
-                      options={companyOptions}
-                      className={detailReadOnlyClass}
-                      placeholder="Not assigned"
-                      searchPlaceholder="Search company"
-                      disabled={!isEditingDetails}
-                    />
-                    {oldValueHint('companyId')}
+                    <Label htmlFor="detail-facilityIds">Sites</Label>
+                    <div className="w-full">
+                      <SearchableSelect
+                        value=""
+                        values={detailFacilityIds ?? []}
+                        onChange={() => undefined}
+                        onValuesChange={(next) => {
+                          if (!isEditingDetails) return
+                          setDetailValue('facilityIds', next, { shouldDirty: true })
+                        }}
+                        options={detailSiteSelectOptions}
+                        className={detailReadOnlyClass}
+                        placeholder=""
+                        searchPlaceholder="Search site"
+                        disabled={!isEditingDetails}
+                        multiSelect
+                        wrapOptions
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {(detailFacilityIds ?? []).length > 0 ? (
+                        (detailFacilityIds ?? []).map((id) => (
+                          <span key={id} className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/30 px-2 py-1 text-xs">
+                            {facilityById.get(id) ?? id}
+                            {isEditingDetails ? (
+                              <button
+                                type="button"
+                                onClick={() => setDetailValue('facilityIds', removeOne(detailFacilityIds ?? [], id), { shouldDirty: true })}
+                                aria-label="Remove site"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            ) : null}
+                          </span>
+                        ))
+                      ) : (
+                        <p className="text-xs text-muted-foreground">No site assigned.</p>
+                      )}
+                    </div>
+                    {oldValueHint('facilityIds')}
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="detail-facilityId">Facility</Label>
-                    <SearchableSelect
-                      value={detailFacilityId ?? ''}
-                      onChange={(value) => {
-                        if (!isEditingDetails) return
-                        setDetailValue('facilityId', value, { shouldDirty: true })
-                      }}
-                      options={detailFacilitySelectOptions}
-                      className={detailReadOnlyClass}
-                      placeholder="Not assigned"
-                      searchPlaceholder="Search facility"
-                      disabled={!isEditingDetails}
-                    />
-                    {oldValueHint('facilityId')}
-                  </div>
+                  ) : null}
                 </div>
               ) : null}
               <div className="flex justify-end">
@@ -1258,19 +1693,33 @@ export default function UserManagementPage() {
                 <h3 className="text-sm font-semibold">User Lifecycle Actions</h3>
                 <p className="text-xs text-muted-foreground">Deactivate for leavers. Permanent delete for mistaken users only.</p>
                 <div className="flex flex-wrap gap-3">
-                  <Button className="h-9 px-3" variant={selectedUser.is_active ? 'destructive' : 'secondary'} onClick={() => void onToggleUser()} disabled={toggleUserMutation.isPending}>
+                  <Button
+                    className="h-9 px-3"
+                    variant="outline"
+                    onClick={() => void onResetPasswordToPhone(selectedUser)}
+                    disabled={resetPasswordMutation.isPending}
+                  >
+                    {resetPasswordMutation.isPending ? 'Resetting...' : 'Reset PW'}
+                  </Button>
+                  <Button
+                    className="h-9 px-3"
+                    variant={selectedUser.is_active ? 'destructive' : 'secondary'}
+                    onClick={() => onOpenUserStatusConfirm(selectedUser, !selectedUser.is_active)}
+                    disabled={toggleUserMutation.isPending}
+                  >
                     {selectedUser.is_active ? 'Deactivate' : 'Activate'}
                   </Button>
                   <Button
                     variant="outline"
                     className="h-9 px-3"
                     onClick={() => {
+                      setDeleteTargetUser(selectedUser)
                       setDeleteConfirmInput('')
                       setIsDeleteConfirmOpen(true)
                     }}
                     disabled={hardDeleteUserMutation.isPending}
                   >
-                    Delete Permanently
+                    Delete
                   </Button>
                 </div>
               </div>
@@ -1299,6 +1748,7 @@ export default function UserManagementPage() {
                 </Card>
               </div>
             ) : null}
+            </div>
 
           </aside>
         </div>
@@ -1326,7 +1776,7 @@ export default function UserManagementPage() {
                         onClick={() => void onHardDelete()}
                         disabled={hardDeleteUserMutation.isPending || deleteConfirmInput.trim() !== deleteTargetUser.user_id}
                       >
-                        {hardDeleteUserMutation.isPending ? 'Deleting...' : 'Delete Permanently'}
+                        {hardDeleteUserMutation.isPending ? 'Deleting...' : 'Delete'}
                       </Button>
                     </div>
                   </CardContent>
@@ -1336,19 +1786,77 @@ export default function UserManagementPage() {
 
       {pendingBulkAction ? (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={() => setPendingBulkAction(null)}>
-          <Card className="w-full max-w-md" onClick={(event) => event.stopPropagation()}>
+          <Card
+            className={`w-full max-w-md bg-card ${pendingBulkAction === 'deactivate' ? 'border-destructive/50' : ''}`}
+            onClick={(event) => event.stopPropagation()}
+          >
             <CardHeader>
-              <CardTitle className="text-base">Confirm Bulk {pendingBulkAction === 'activate' ? 'Activation' : 'Deactivation'}</CardTitle>
+              <CardTitle className={`flex items-center gap-2 text-base ${pendingBulkAction === 'deactivate' ? 'text-destructive' : ''}`}>
+                {pendingBulkAction === 'deactivate' ? <AlertTriangle className="h-4 w-4" /> : null}
+                Confirm Bulk {pendingBulkAction === 'activate' ? 'Activation' : 'Deactivation'}
+              </CardTitle>
               <CardDescription>
-                You are about to {pendingBulkAction} {selectedUsers.length} selected users. Proceed?
+                {pendingBulkAction === 'deactivate'
+                  ? `This will deactivate ${selectedUsers.length} users and block access.`
+                  : `This will activate ${selectedUsers.length} users.`}
               </CardDescription>
             </CardHeader>
             <CardContent className="flex justify-end gap-2">
-              <Button variant="outline" className="h-9 px-3" onClick={() => setPendingBulkAction(null)}>
+              <Button variant="outline" className="h-9 px-3" onClick={() => setPendingBulkAction(null)} disabled={toggleUserMutation.isPending}>
                 Cancel
               </Button>
-              <Button className="h-9 px-3" onClick={() => void onConfirmBulkAction()}>
-                Confirm
+              <Button
+                className="h-9 px-3"
+                variant={pendingBulkAction === 'deactivate' ? 'destructive' : 'default'}
+                onClick={() => void onConfirmBulkAction()}
+                disabled={toggleUserMutation.isPending}
+              >
+                {toggleUserMutation.isPending ? 'Updating...' : 'Confirm'}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
+
+      {pendingUserStatusAction ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+          onClick={() => {
+            if (toggleUserMutation.isPending) return
+            setPendingUserStatusAction(null)
+          }}
+        >
+          <Card
+            className={`w-full max-w-md bg-card ${pendingUserStatusAction.nextIsActive ? '' : 'border-destructive/50'}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <CardHeader>
+              <CardTitle className={`flex items-center gap-2 text-base ${pendingUserStatusAction.nextIsActive ? '' : 'text-destructive'}`}>
+                {pendingUserStatusAction.nextIsActive ? null : <AlertTriangle className="h-4 w-4" />}
+                Confirm {pendingUserStatusAction.nextIsActive ? 'Activation' : 'Deactivation'}
+              </CardTitle>
+              <CardDescription>
+                {pendingUserStatusAction.nextIsActive
+                  ? `This will activate ${pendingUserStatusAction.user.full_name || pendingUserStatusAction.user.user_id}.`
+                  : `This will deactivate ${pendingUserStatusAction.user.full_name || pendingUserStatusAction.user.user_id} and block access.`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                className="h-9 px-3"
+                onClick={() => setPendingUserStatusAction(null)}
+                disabled={toggleUserMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="h-9 px-3"
+                variant={pendingUserStatusAction.nextIsActive ? 'default' : 'destructive'}
+                onClick={() => void onConfirmUserStatusAction()}
+                disabled={toggleUserMutation.isPending}
+              >
+                {toggleUserMutation.isPending ? 'Updating...' : 'Confirm'}
               </Button>
             </CardContent>
           </Card>

@@ -37,7 +37,23 @@ export interface AdminFacilityWithUserStats extends AdminFacilityRow {
   l1_user_count: number
   l2_user_count: number
   l3_user_count: number
-  client_user_count: number
+}
+
+export interface FacilityAssignedUser {
+  user_id: string
+  full_name: string
+  employee_id: string
+  role_code: 'L1' | 'L2' | 'L3'
+}
+
+export interface FacilityAssignableUser extends FacilityAssignedUser {
+  assigned: boolean
+}
+
+export interface AdminFacilityMembers {
+  facility: AdminFacilityDetailsRow
+  assignedUsers: FacilityAssignedUser[]
+  companyAssignableUsers: FacilityAssignableUser[]
 }
 
 export interface AdminCompanyDetails {
@@ -50,6 +66,25 @@ export interface AdminCompanyDetails {
     client_user_count: number
   }
   facilities: AdminFacilityWithUserStats[]
+  accountUsers: Array<{
+    user_id: string
+    employee_id: string
+    full_name: string
+    email: string
+    role_code: RoleCode
+  }>
+  clientAccessUsers: Array<{
+    user_id: string
+    employee_id: string
+    full_name: string
+    email: string
+  }>
+  clientAccessCandidates: Array<{
+    user_id: string
+    employee_id: string
+    full_name: string
+    email: string
+  }>
 }
 
 type RoleCode = 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'CLIENT'
@@ -60,6 +95,7 @@ const companiesKey = ['admin', 'companies'] as const
 const companyDetailsPrefix = ['admin', 'company-details'] as const
 const companyDetailsKey = (companyId?: string) => ['admin', 'company-details', companyId ?? 'missing'] as const
 const facilitiesKey = (companyId?: string) => ['admin', 'facilities', companyId ?? 'all'] as const
+const facilityMembersKey = (facilityId?: string) => ['admin', 'facility-members', facilityId ?? 'missing'] as const
 const adminKey = ['admin'] as const
 
 function buildActiveProfileSet(rows: Array<{ id: string; is_active: boolean }> | null | undefined) {
@@ -124,7 +160,7 @@ export function useAdminCompanies() {
           .select('company_id, user_id, is_active'),
         supabase
           .from('profiles')
-          .select('id, is_active'),
+          .select('id, employee_id, full_name, email, is_active'),
         supabase
           .from('user_role_assignments')
           .select('user_id, role_code, is_active'),
@@ -273,7 +309,6 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
         l1: Set<string>
         l2: Set<string>
         l3: Set<string>
-        client: Set<string>
       }>()
 
       for (const facilityId of facilityIds) {
@@ -282,7 +317,6 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
           l1: new Set<string>(),
           l2: new Set<string>(),
           l3: new Set<string>(),
-          client: new Set<string>(),
         })
       }
 
@@ -293,6 +327,7 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
 
         const roleCode = activeScopedRoleByUser.get(row.user_id)
         if (!roleCode) continue
+        if (roleCode === 'CLIENT') continue
 
         const statsSet = facilityUserSets.get(row.facility_id)
         if (!statsSet) continue
@@ -301,7 +336,6 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
         if (roleCode === 'L1') statsSet.l1.add(row.user_id)
         if (roleCode === 'L2') statsSet.l2.add(row.user_id)
         if (roleCode === 'L3') statsSet.l3.add(row.user_id)
-        if (roleCode === 'CLIENT') statsSet.client.add(row.user_id)
       }
 
       const facilities = facilityRows.map((row) => {
@@ -312,9 +346,64 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
           l1_user_count: statsSet?.l1.size ?? 0,
           l2_user_count: statsSet?.l2.size ?? 0,
           l3_user_count: statsSet?.l3.size ?? 0,
-          client_user_count: statsSet?.client.size ?? 0,
         }
       })
+
+      const profileById = new Map<string, { employee_id: string; full_name: string; email: string; is_active: boolean }>()
+      for (const row of (profilesResponse.data ?? []) as Array<{ id: string; employee_id: string | null; full_name: string | null; email: string | null; is_active: boolean }>) {
+        const fallbackName = row.full_name?.trim() || row.employee_id?.trim() || 'Unnamed user'
+
+        profileById.set(row.id, {
+          employee_id: row.employee_id ?? '-',
+          full_name: fallbackName,
+          email: row.email ?? '-',
+          is_active: row.is_active,
+        })
+      }
+
+      const accountUsers = Array.from(companyScopedUsers)
+        .map((userId) => {
+          const profile = profileById.get(userId)
+          const roleCode = activeScopedRoleByUser.get(userId)
+
+          if (!profile || !roleCode) return null
+
+          return {
+            user_id: userId,
+            employee_id: profile.employee_id,
+            full_name: profile.full_name,
+            email: profile.email,
+            role_code: roleCode,
+          }
+        })
+        .filter((row): row is { user_id: string; employee_id: string; full_name: string; email: string; role_code: RoleCode } => Boolean(row))
+        .sort((a, b) => a.full_name.localeCompare(b.full_name))
+
+      const clientAccessUsers = accountUsers
+        .filter((row) => row.role_code === 'CLIENT')
+        .map((row) => ({
+          user_id: row.user_id,
+          employee_id: row.employee_id,
+          full_name: row.full_name,
+          email: row.email,
+        }))
+
+      const clientAccessCandidates = Array.from(activeScopedRoleByUser.entries())
+        .filter(([, role]) => role === 'CLIENT')
+        .map(([userId]) => {
+          const profile = profileById.get(userId)
+          if (!profile || !profile.is_active) return null
+
+          return {
+            user_id: userId,
+            employee_id: profile.employee_id,
+            full_name: profile.full_name,
+            email: profile.email,
+          }
+        })
+        .filter((row): row is { user_id: string; employee_id: string; full_name: string; email: string } => Boolean(row))
+        .filter((row) => !clientAccessUsers.some((existing) => existing.user_id === row.user_id))
+        .sort((a, b) => a.full_name.localeCompare(b.full_name))
 
       const company: AdminCompanyRow = {
         ...companyResponse.data,
@@ -326,17 +415,66 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
         company,
         stats: companyStats,
         facilities,
+        accountUsers,
+        clientAccessUsers,
+        clientAccessCandidates,
       }
     },
   })
 }
 
+export function useGrantCompanyClientAccess() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (payload: { companyId: string; userIds: string[] }) => {
+      if (payload.userIds.length === 0) return
+
+      const rows = payload.userIds.map((userId) => ({
+        user_id: userId,
+        company_id: payload.companyId,
+        is_active: true,
+      }))
+
+      const { error } = await supabase
+        .from('user_companies')
+        .upsert(rows, { onConflict: 'user_id,company_id' })
+
+      if (error) throw error
+    },
+    onSuccess: async (_data, variables) => {
+      await queryClient.invalidateQueries({ queryKey: companyDetailsKey(variables.companyId) })
+      await queryClient.invalidateQueries({ queryKey: adminKey })
+    },
+  })
+}
+
+export function useRevokeCompanyClientAccess() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (payload: { companyId: string; userId: string }) => {
+      const { error } = await supabase
+        .from('user_companies')
+        .update({ is_active: false })
+        .eq('company_id', payload.companyId)
+        .eq('user_id', payload.userId)
+
+      if (error) throw error
+    },
+    onSuccess: async (_data, variables) => {
+      await queryClient.invalidateQueries({ queryKey: companyDetailsKey(variables.companyId) })
+      await queryClient.invalidateQueries({ queryKey: adminKey })
+    },
+  })
+}
 export function useCreateCompany() {
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (payload: { companyName: string; billingAddress: string }) => {
       const { error } = await supabase.from('companies').insert({
+        name: payload.companyName,
         company_name: payload.companyName,
         billing_address: payload.billingAddress,
         is_active: true,
@@ -358,6 +496,7 @@ export function useUpdateCompany() {
       const { error } = await supabase
         .from('companies')
         .update({
+          name: payload.companyName,
           company_name: payload.companyName,
           billing_address: payload.billingAddress,
         })
@@ -619,6 +758,183 @@ export function useAdminFacility(facilityId: string | undefined) {
       if (error) throw error
       if (!data) throw new Error('Facility not found.')
       return data
+    },
+  })
+}
+
+export function useAdminFacilityMembers(facilityId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  useEffect(() => {
+    if (!facilityId) return
+
+    const channel = supabase
+      .channel(`admin-facility-members-${facilityId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'facilities' }, () => {
+        void queryClient.invalidateQueries({ queryKey: facilityMembersKey(facilityId) })
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_companies' }, () => {
+        void queryClient.invalidateQueries({ queryKey: facilityMembersKey(facilityId) })
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_facilities' }, () => {
+        void queryClient.invalidateQueries({ queryKey: facilityMembersKey(facilityId) })
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_role_assignments' }, () => {
+        void queryClient.invalidateQueries({ queryKey: facilityMembersKey(facilityId) })
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
+        void queryClient.invalidateQueries({ queryKey: facilityMembersKey(facilityId) })
+      })
+      .subscribe()
+
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [facilityId, queryClient])
+
+  return useQuery({
+    queryKey: facilityMembersKey(facilityId),
+    enabled: Boolean(facilityId),
+    queryFn: async (): Promise<AdminFacilityMembers> => {
+      if (!facilityId) throw new Error('Facility not found.')
+
+      const facilityResponse = await supabase
+        .from('facilities')
+        .select('id, facility_code, company_id, facility_name, address_line_1, city, state, country, is_active, created_at, companies(id, company_code, company_name, is_active)')
+        .eq('id', facilityId)
+        .maybeSingle<AdminFacilityDetailsRow>()
+
+      if (facilityResponse.error) throw facilityResponse.error
+      if (!facilityResponse.data) throw new Error('Facility not found.')
+
+      const companyId = facilityResponse.data.company_id
+
+      const [profilesResponse, rolesResponse, companyAccessResponse, facilityAccessResponse] = await Promise.all([
+        supabase
+          .from('profiles')
+          .select('id, full_name, employee_id, is_active'),
+        supabase
+          .from('user_role_assignments')
+          .select('user_id, role_code, is_active')
+          .in('role_code', ['L1', 'L2', 'L3']),
+        supabase
+          .from('user_companies')
+          .select('user_id, is_active')
+          .eq('company_id', companyId),
+        supabase
+          .from('user_facilities')
+          .select('user_id, is_active')
+          .eq('facility_id', facilityId),
+      ])
+
+      if (profilesResponse.error) throw profilesResponse.error
+      if (rolesResponse.error) throw rolesResponse.error
+      if (companyAccessResponse.error) throw companyAccessResponse.error
+      if (facilityAccessResponse.error) throw facilityAccessResponse.error
+
+      const activeProfiles = new Map<string, { full_name: string; employee_id: string }>()
+      for (const row of profilesResponse.data ?? []) {
+        if (!row.is_active) continue
+        activeProfiles.set(row.id, {
+          full_name: row.full_name ?? 'Unnamed user',
+          employee_id: row.employee_id ?? '-',
+        })
+      }
+
+      const roleByUser = new Map<string, 'L1' | 'L2' | 'L3'>()
+      for (const row of (rolesResponse.data ?? []) as Array<{ user_id: string; role_code: 'L1' | 'L2' | 'L3'; is_active: boolean }>) {
+        if (!row.is_active) continue
+        roleByUser.set(row.user_id, row.role_code)
+      }
+
+      const activeCompanyUsers = new Set<string>()
+      for (const row of companyAccessResponse.data ?? []) {
+        if (!row.is_active) continue
+        activeCompanyUsers.add(row.user_id)
+      }
+
+      const activeFacilityUsers = new Set<string>()
+      for (const row of facilityAccessResponse.data ?? []) {
+        if (!row.is_active) continue
+        activeFacilityUsers.add(row.user_id)
+      }
+
+      const companyAssignableUsers: FacilityAssignableUser[] = []
+      for (const userId of activeCompanyUsers) {
+        const profile = activeProfiles.get(userId)
+        const role = roleByUser.get(userId)
+        if (!profile || !role) continue
+
+        companyAssignableUsers.push({
+          user_id: userId,
+          full_name: profile.full_name,
+          employee_id: profile.employee_id,
+          role_code: role,
+          assigned: activeFacilityUsers.has(userId),
+        })
+      }
+
+      companyAssignableUsers.sort((a, b) => {
+        const byName = a.full_name.localeCompare(b.full_name)
+        if (byName !== 0) return byName
+        return a.employee_id.localeCompare(b.employee_id)
+      })
+
+      const assignedUsers = companyAssignableUsers
+        .filter((row) => row.assigned)
+        .map(({ assigned, ...user }) => user)
+
+      return {
+        facility: facilityResponse.data,
+        assignedUsers,
+        companyAssignableUsers,
+      }
+    },
+  })
+}
+
+export function useAssignFacilityUsers() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (payload: { facilityId: string; userIds: string[] }) => {
+      if (payload.userIds.length === 0) return
+
+      const rows = payload.userIds.map((userId) => ({
+        user_id: userId,
+        facility_id: payload.facilityId,
+        is_active: true,
+      }))
+
+      const { error } = await supabase
+        .from('user_facilities')
+        .upsert(rows, { onConflict: 'user_id,facility_id' })
+
+      if (error) throw error
+    },
+    onSuccess: async (_data, variables) => {
+      await queryClient.invalidateQueries({ queryKey: facilityMembersKey(variables.facilityId) })
+      await queryClient.invalidateQueries({ queryKey: adminKey })
+    },
+  })
+}
+
+export function useRemoveFacilityUser() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (payload: { facilityId: string; userId: string }) => {
+      const { error } = await supabase
+        .from('user_facilities')
+        .update({ is_active: false })
+        .eq('facility_id', payload.facilityId)
+        .eq('user_id', payload.userId)
+
+      if (error) throw error
+    },
+    onSuccess: async (_data, variables) => {
+      await queryClient.invalidateQueries({ queryKey: facilityMembersKey(variables.facilityId) })
+      await queryClient.invalidateQueries({ queryKey: adminKey })
     },
   })
 }

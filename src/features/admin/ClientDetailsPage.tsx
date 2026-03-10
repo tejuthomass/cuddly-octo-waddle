@@ -1,25 +1,31 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowDown, ArrowDownUp, ArrowUp, Eye, Pencil, Plus, Power, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowDownUp, ArrowUp, Eye, Pencil, Plus, Power, Search, Trash2, Upload, UserPlus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PageSizeSelect } from '@/components/ui/page-size-select'
+import { SearchableSelect } from '@/components/ui/searchable-select'
 import { TooltipIconButton } from '@/components/ui/tooltip-icon-button'
+import { useCompanyOptions, useFacilityOptions } from '@/hooks/useAdminAccess'
+import { useAdminUsers } from '@/hooks/useAdminUsers'
 import {
   type AdminFacilityWithUserStats,
   useAdminCompanyDetails,
   useCreateFacility,
+  useGrantCompanyClientAccess,
   useHardDeleteCompany,
   useHardDeleteFacility,
+  useRevokeCompanyClientAccess,
   useToggleCompanyActive,
   useToggleFacilityActive,
   useUpdateCompany,
+  useUpdateCompanyLogo,
   useUpdateFacility,
 } from '@/hooks/useAdminOrganizations'
 import { toHumanErrorMessage } from '@/lib/errors'
@@ -30,7 +36,6 @@ const companySchema = z.object({
 })
 
 const facilitySchema = z.object({
-  facilityCode: z.string().min(4, 'Facility code must be at least 4 characters.').max(20).optional().or(z.literal('')),
   facilityName: z.string().min(2, 'Facility name is required.'),
   addressLine1: z.string().min(5, 'Address is required.'),
   city: z.string().min(2, 'City is required.'),
@@ -57,13 +62,22 @@ function sortButtonClass(active: boolean) {
 
 export default function ClientDetailsPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const params = useParams<{ companyId: string }>()
   const companyId = params.companyId
+  const fromState = (location.state as { from?: string } | null)?.from
+  const backTarget = typeof fromState === 'string' && fromState.length > 0 ? fromState : '/admin/clients'
 
   const { data, isLoading } = useAdminCompanyDetails(companyId)
+  const { data: users = [] } = useAdminUsers()
+  const { data: companies = [] } = useCompanyOptions()
+  const { data: facilities = [] } = useFacilityOptions()
   const updateCompanyMutation = useUpdateCompany()
   const toggleCompanyMutation = useToggleCompanyActive()
   const deleteCompanyMutation = useHardDeleteCompany()
+  const updateCompanyLogoMutation = useUpdateCompanyLogo()
+  const grantCompanyClientAccessMutation = useGrantCompanyClientAccess()
+  const revokeCompanyClientAccessMutation = useRevokeCompanyClientAccess()
   const createFacilityMutation = useCreateFacility()
   const updateFacilityMutation = useUpdateFacility()
   const toggleFacilityMutation = useToggleFacilityActive()
@@ -74,14 +88,26 @@ export default function ClientDetailsPage() {
   const [facilitySortDirection, setFacilitySortDirection] = useState<SortDirection>('desc')
   const [facilityPage, setFacilityPage] = useState(1)
   const [facilityPageSize, setFacilityPageSize] = useState(10)
+  const [selectedFacilityIds, setSelectedFacilityIds] = useState<string[]>([])
+  const [lastSelectedFacilityIndex, setLastSelectedFacilityIndex] = useState<number | null>(null)
+  const [selectedClientCandidateIds, setSelectedClientCandidateIds] = useState<string[]>([])
 
   const [isFacilityModalOpen, setIsFacilityModalOpen] = useState(false)
+  const [isEditCompanySidebarOpen, setIsEditCompanySidebarOpen] = useState(false)
   const [editingFacility, setEditingFacility] = useState<AdminFacilityWithUserStats | null>(null)
   const [isDeleteFacilityConfirmOpen, setIsDeleteFacilityConfirmOpen] = useState(false)
   const [deleteFacilityConfirmInput, setDeleteFacilityConfirmInput] = useState('')
   const [deleteTargetFacility, setDeleteTargetFacility] = useState<AdminFacilityWithUserStats | null>(null)
   const [isDeleteCompanyConfirmOpen, setIsDeleteCompanyConfirmOpen] = useState(false)
   const [deleteCompanyConfirmInput, setDeleteCompanyConfirmInput] = useState('')
+  const [isAddClientUsersOpen, setIsAddClientUsersOpen] = useState(false)
+  const [clientUserSearch, setClientUserSearch] = useState('')
+  const [clientUserCompanyFilter, setClientUserCompanyFilter] = useState<string>('ALL')
+  const [clientUserFacilityFilter, setClientUserFacilityFilter] = useState<string>('ALL')
+  const [clientUserPage, setClientUserPage] = useState(1)
+  const [clientUserPageSize, setClientUserPageSize] = useState(10)
+  const sitesTableRef = useRef<HTMLDivElement | null>(null)
+  const logoInputRef = useRef<HTMLInputElement | null>(null)
 
   const {
     register: registerCompany,
@@ -104,7 +130,6 @@ export default function ClientDetailsPage() {
   } = useForm<FacilityFormValues>({
     resolver: zodResolver(facilitySchema),
     defaultValues: {
-      facilityCode: '',
       facilityName: '',
       addressLine1: '',
       city: '',
@@ -154,11 +179,35 @@ export default function ClientDetailsPage() {
     setFacilitySortDirection('asc')
   }
 
+  const onSelectFacilityRow = (facilityId: string, rowIndex: number, options: { shift: boolean; multi: boolean }) => {
+    if (options.shift && lastSelectedFacilityIndex !== null) {
+      const start = Math.min(lastSelectedFacilityIndex, rowIndex)
+      const end = Math.max(lastSelectedFacilityIndex, rowIndex)
+      const rangeIds = pagedFacilities.slice(start, end + 1).map((row) => row.id)
+
+      setSelectedFacilityIds((prev) => {
+        if (options.multi) {
+          return Array.from(new Set([...prev, ...rangeIds]))
+        }
+        return rangeIds
+      })
+      return
+    }
+
+    if (options.multi) {
+      setSelectedFacilityIds((prev) => (prev.includes(facilityId) ? prev.filter((id) => id !== facilityId) : [...prev, facilityId]))
+      setLastSelectedFacilityIndex(rowIndex)
+      return
+    }
+
+    setSelectedFacilityIds([facilityId])
+    setLastSelectedFacilityIndex(rowIndex)
+  }
+
   const openFacilityModal = (facility?: AdminFacilityWithUserStats) => {
     if (facility) {
       setEditingFacility(facility)
       resetFacility({
-        facilityCode: facility.facility_code,
         facilityName: facility.facility_name,
         addressLine1: facility.address_line_1,
         city: facility.city,
@@ -168,7 +217,6 @@ export default function ClientDetailsPage() {
     } else {
       setEditingFacility(null)
       resetFacility({
-        facilityCode: '',
         facilityName: '',
         addressLine1: '',
         city: '',
@@ -192,10 +240,9 @@ export default function ClientDetailsPage() {
           state: values.state,
           country: values.country,
         })
-        toast.success('Facility updated.')
+        toast.success('Site updated.')
       } else {
         await createFacilityMutation.mutateAsync({
-          facilityCode: values.facilityCode || undefined,
           companyId,
           facilityName: values.facilityName,
           addressLine1: values.addressLine1,
@@ -203,14 +250,14 @@ export default function ClientDetailsPage() {
           state: values.state,
           country: values.country,
         })
-        toast.success('Facility created.')
+        toast.success('Site created.')
       }
 
       setIsFacilityModalOpen(false)
       setEditingFacility(null)
       resetFacility()
     } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to save facility.'))
+      toast.error(toHumanErrorMessage(error, 'Unable to save site.'))
     }
   }
 
@@ -219,9 +266,9 @@ export default function ClientDetailsPage() {
 
     try {
       await toggleCompanyMutation.mutateAsync({ companyId: data.company.id, isActive: !data.company.is_active })
-      toast.success(!data.company.is_active ? 'Client enabled.' : 'Client disabled.')
+      toast.success(!data.company.is_active ? 'Account enabled.' : 'Account disabled.')
     } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to update client status.'))
+      toast.error(toHumanErrorMessage(error, 'Unable to update account status.'))
     }
   }
 
@@ -234,10 +281,11 @@ export default function ClientDetailsPage() {
         companyName: values.companyName,
         billingAddress: values.billingAddress,
       })
-      toast.success('Client updated.')
+      toast.success('Account updated.')
       resetCompany(values)
+      setIsEditCompanySidebarOpen(false)
     } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to update client.'))
+      toast.error(toHumanErrorMessage(error, 'Unable to update account.'))
     }
   }
 
@@ -245,16 +293,16 @@ export default function ClientDetailsPage() {
     if (!data) return
 
     if (deleteCompanyConfirmInput.trim() !== data.company.company_code) {
-      toast.error('Type the exact Client ID to confirm deletion.')
+      toast.error('Type the exact Account ID to confirm deletion.')
       return
     }
 
     try {
       await deleteCompanyMutation.mutateAsync({ companyId: data.company.id })
-      toast.success('Client permanently deleted.')
-      navigate('/admin/clients')
+      toast.success('Account permanently deleted.')
+      navigate('/admin/clients', { replace: true })
     } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to delete client.'))
+      toast.error(toHumanErrorMessage(error, 'Unable to delete account.'))
     }
   }
 
@@ -267,9 +315,9 @@ export default function ClientDetailsPage() {
   const onToggleFacility = async (facility: AdminFacilityWithUserStats) => {
     try {
       await toggleFacilityMutation.mutateAsync({ facilityId: facility.id, isActive: !facility.is_active })
-      toast.success(!facility.is_active ? 'Facility enabled.' : 'Facility disabled.')
+      toast.success(!facility.is_active ? 'Site enabled.' : 'Site disabled.')
     } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to update facility status.'))
+      toast.error(toHumanErrorMessage(error, 'Unable to update site status.'))
     }
   }
 
@@ -277,18 +325,68 @@ export default function ClientDetailsPage() {
     if (!deleteTargetFacility) return
 
     if (deleteFacilityConfirmInput.trim() !== deleteTargetFacility.facility_code) {
-      toast.error('Type the exact Facility ID to confirm deletion.')
+      toast.error('Type the exact Site ID to confirm deletion.')
       return
     }
 
     try {
       await deleteFacilityMutation.mutateAsync({ facilityId: deleteTargetFacility.id })
-      toast.success('Facility permanently deleted.')
+      toast.success('Site permanently deleted.')
       setDeleteTargetFacility(null)
       setDeleteFacilityConfirmInput('')
       setIsDeleteFacilityConfirmOpen(false)
     } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to delete facility.'))
+      toast.error(toHumanErrorMessage(error, 'Unable to delete site.'))
+    }
+  }
+
+  const onUploadCompanyLogo = async (file: File) => {
+    if (!data) return
+
+    try {
+      const blob = new Blob([await file.arrayBuffer()], { type: file.type || 'image/png' })
+      await updateCompanyLogoMutation.mutateAsync({ companyId: data.company.id, logoBlob: blob })
+      toast.success('Account logo updated.')
+    } catch (error) {
+      toast.error(toHumanErrorMessage(error, 'Unable to upload account logo.'))
+    }
+  }
+
+  const onRemoveCompanyLogo = async () => {
+    if (!data) return
+
+    try {
+      await updateCompanyLogoMutation.mutateAsync({ companyId: data.company.id, logoBlob: null })
+      toast.success('Account logo removed.')
+    } catch (error) {
+      toast.error(toHumanErrorMessage(error, 'Unable to remove account logo.'))
+    }
+  }
+
+  const onGrantClientAccess = async () => {
+    if (!data || selectedClientCandidateIds.length === 0) {
+      toast.error('Select at least one client user to add.')
+      return
+    }
+
+    try {
+      await grantCompanyClientAccessMutation.mutateAsync({ companyId: data.company.id, userIds: selectedClientCandidateIds })
+      setSelectedClientCandidateIds([])
+      setIsAddClientUsersOpen(false)
+      toast.success('Client access granted.')
+    } catch (error) {
+      toast.error(toHumanErrorMessage(error, 'Unable to grant selected client access.'))
+    }
+  }
+
+  const onRevokeClientAccess = async (userId: string) => {
+    if (!data) return
+
+    try {
+      await revokeCompanyClientAccessMutation.mutateAsync({ companyId: data.company.id, userId })
+      toast.success('Client access removed.')
+    } catch (error) {
+      toast.error(toHumanErrorMessage(error, 'Unable to remove client access.'))
     }
   }
 
@@ -299,6 +397,7 @@ export default function ClientDetailsPage() {
       companyName: data.company.company_name,
       billingAddress: data.company.billing_address,
     })
+    setIsEditCompanySidebarOpen(false)
   }, [data, resetCompany])
 
   useEffect(() => {
@@ -311,18 +410,108 @@ export default function ClientDetailsPage() {
     }
   }, [facilityPage, totalFacilityPages])
 
+  useEffect(() => {
+    const onDocumentPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (sitesTableRef.current?.contains(target)) return
+
+      setSelectedFacilityIds([])
+      setLastSelectedFacilityIndex(null)
+    }
+
+    document.addEventListener('mousedown', onDocumentPointerDown)
+    return () => {
+      document.removeEventListener('mousedown', onDocumentPointerDown)
+    }
+  }, [])
+
+  useEffect(() => {
+    setSelectedClientCandidateIds([])
+  }, [data?.company.id])
+
+  const clientAccessUserIds = useMemo(() => new Set((data?.clientAccessUsers ?? []).map((user) => user.user_id)), [data?.clientAccessUsers])
+
+  const candidateClientUsers = useMemo(() => {
+    const query = clientUserSearch.trim().toLowerCase()
+
+    return users.filter((user) => {
+      if (!user.is_active) return false
+      if (user.role_code !== 'CLIENT') return false
+      if (clientAccessUserIds.has(user.id)) return false
+      if (clientUserCompanyFilter !== 'ALL' && user.company_id !== clientUserCompanyFilter) return false
+      if (clientUserFacilityFilter !== 'ALL' && user.facility_id !== clientUserFacilityFilter) return false
+
+      if (!query) return true
+      return [user.user_id, user.full_name, user.email, user.phone ?? ''].join(' ').toLowerCase().includes(query)
+    })
+  }, [clientAccessUserIds, clientUserCompanyFilter, clientUserFacilityFilter, clientUserSearch, users])
+
+  const clientUserFacilityOptions = useMemo(() => {
+    if (clientUserCompanyFilter === 'ALL') {
+      return [{ value: 'ALL', label: 'All sites' }]
+    }
+
+    return [
+      { value: 'ALL', label: 'All sites' },
+      ...facilities
+        .filter((facility) => facility.companyId === clientUserCompanyFilter)
+        .map((facility) => ({ value: facility.id, label: facility.label })),
+    ]
+  }, [clientUserCompanyFilter, facilities])
+
+  const userById = useMemo(() => {
+    const map = new Map<string, (typeof users)[number]>()
+    for (const user of users) {
+      map.set(user.id, user)
+    }
+    return map
+  }, [users])
+
+  const getClientDisplayName = (user: { user_id: string; full_name: string; employee_id: string; email: string }) => {
+    const linkedUser = userById.get(user.user_id)
+    if (user.full_name && user.full_name !== 'Unnamed user') return user.full_name
+    if (linkedUser?.full_name) return linkedUser.full_name
+    if (user.email && user.email !== '-') return user.email
+    if (linkedUser?.email) return linkedUser.email
+    if (user.employee_id && user.employee_id !== '-') return user.employee_id
+    if (linkedUser?.user_id) return linkedUser.user_id
+    return user.user_id
+  }
+
+  const getClientDisplayEmail = (user: { user_id: string; email: string }) => {
+    const linkedUser = userById.get(user.user_id)
+    if (user.email && user.email !== '-') return user.email
+    return linkedUser?.email ?? '-'
+  }
+
+  const totalClientUserPages = Math.max(1, Math.ceil(candidateClientUsers.length / clientUserPageSize))
+  const pagedClientUsers = useMemo(() => {
+    const start = (clientUserPage - 1) * clientUserPageSize
+    return candidateClientUsers.slice(start, start + clientUserPageSize)
+  }, [candidateClientUsers, clientUserPage, clientUserPageSize])
+
+  useEffect(() => {
+    setClientUserPage(1)
+  }, [clientUserSearch, clientUserCompanyFilter, clientUserFacilityFilter, clientUserPageSize])
+
+  useEffect(() => {
+    if (clientUserPage > totalClientUserPages) {
+      setClientUserPage(totalClientUserPages)
+    }
+  }, [clientUserPage, totalClientUserPages])
+
   return (
     <main className="space-y-6 p-6">
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <CardTitle>Client Details</CardTitle>
+              <CardTitle>Account Details</CardTitle>
               <CardDescription>
-                {data ? `${data.company.company_code} - full metadata, calculated user counts, and facilities` : 'Loading client details'}
+                {data ? `${data.company.company_name} - metadata, users, access sharing, and sites` : 'Loading account details'}
               </CardDescription>
             </div>
-            <Button type="button" variant="outline" className="h-9 px-3" onClick={() => navigate('/admin/clients')}>
+            <Button type="button" variant="outline" className="h-9 px-3" onClick={() => navigate(backTarget)}>
               Back
             </Button>
           </div>
@@ -335,7 +524,7 @@ export default function ClientDetailsPage() {
             <>
               <div className="grid gap-3 rounded-md border border-border/70 bg-muted/20 p-4 md:grid-cols-3">
                 <div>
-                  <p className="text-xs text-muted-foreground">Client ID</p>
+                  <p className="text-xs text-muted-foreground">Account ID</p>
                   <p className="text-sm font-medium">{data.company.company_code}</p>
                 </div>
                 <div>
@@ -348,74 +537,113 @@ export default function ClientDetailsPage() {
                 </div>
               </div>
 
-              <form className="grid gap-4 rounded-md border border-border/70 p-4 md:grid-cols-2" onSubmit={handleCompanySubmit(onUpdateCompany)}>
-                <div className="space-y-2">
-                  <Label htmlFor="companyName">Name</Label>
-                  <Input id="companyName" {...registerCompany('companyName')} />
-                  {companyErrors.companyName ? <p className="text-xs text-destructive">{companyErrors.companyName.message}</p> : null}
+              <section className="grid gap-4 rounded-md border border-border/70 p-4 md:grid-cols-2">
+                <div className="md:col-span-2 flex items-center justify-between">
+                  <p className="text-xs text-muted-foreground">Account metadata</p>
+                  <TooltipIconButton className="h-8 w-8" tooltip="Edit account metadata" onClick={() => setIsEditCompanySidebarOpen(true)}>
+                    <Pencil className="h-4 w-4" />
+                  </TooltipIconButton>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="billingAddress">Billing Address</Label>
-                  <Input id="billingAddress" {...registerCompany('billingAddress')} />
-                  {companyErrors.billingAddress ? <p className="text-xs text-destructive">{companyErrors.billingAddress.message}</p> : null}
+                  <p className="text-xs text-muted-foreground">Name</p>
+                  <p className="rounded-md border border-border/70 bg-muted/10 px-3 py-2 text-sm">{data.company.company_name}</p>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">Billing Address</p>
+                  <p className="rounded-md border border-border/70 bg-muted/10 px-3 py-2 text-sm">{data.company.billing_address}</p>
+                </div>
+                <div className="space-y-2 md:col-span-2 rounded-md border border-border/70 bg-muted/20 p-3">
+                  <p className="text-xs text-muted-foreground">Account Logo</p>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {data.company.logo_url ? (
+                      <img src={data.company.logo_url} alt={data.company.company_name} className="h-12 w-12 rounded-full border border-border object-cover" />
+                    ) : (
+                      <div className="flex h-12 w-12 items-center justify-center rounded-full border border-border bg-muted text-sm font-semibold">
+                        {data.company.company_name.slice(0, 1).toUpperCase()}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="md:col-span-2 flex flex-wrap justify-end gap-2">
                   <Button type="button" variant={data.company.is_active ? 'destructive' : 'secondary'} className="h-9 px-3" onClick={() => void onToggleCompany()} disabled={toggleCompanyMutation.isPending}>
                     {data.company.is_active ? 'Deactivate' : 'Activate'}
                   </Button>
-                  <Button type="submit" className="h-9 px-3" disabled={!isCompanyDirty || updateCompanyMutation.isPending}>
-                    {updateCompanyMutation.isPending ? 'Saving...' : 'Save'}
-                  </Button>
                   <Button type="button" variant="outline" className="h-9 px-3" onClick={() => { setDeleteCompanyConfirmInput(''); setIsDeleteCompanyConfirmOpen(true) }}>
                     Delete Permanently
                   </Button>
                 </div>
-              </form>
+              </section>
 
-              <div className="grid gap-3 md:grid-cols-6">
+              <div className="grid gap-3 md:grid-cols-4">
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardDescription>Total Users</CardDescription>
+                    <CardDescription>All Account Users</CardDescription>
                     <CardTitle className="text-lg">{data.stats.total_user_count}</CardTitle>
                   </CardHeader>
                 </Card>
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardDescription>L1</CardDescription>
-                    <CardTitle className="text-lg">{data.stats.l1_user_count}</CardTitle>
+                    <CardDescription>Operational Team (L1-L3)</CardDescription>
+                    <CardTitle className="text-lg">{data.stats.l1_user_count + data.stats.l2_user_count + data.stats.l3_user_count}</CardTitle>
                   </CardHeader>
                 </Card>
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardDescription>L2</CardDescription>
-                    <CardTitle className="text-lg">{data.stats.l2_user_count}</CardTitle>
-                  </CardHeader>
-                </Card>
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardDescription>L3</CardDescription>
-                    <CardTitle className="text-lg">{data.stats.l3_user_count}</CardTitle>
-                  </CardHeader>
-                </Card>
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardDescription>Client Users</CardDescription>
+                    <CardDescription>Client Access Users</CardDescription>
                     <CardTitle className="text-lg">{data.stats.client_user_count}</CardTitle>
                   </CardHeader>
                 </Card>
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardDescription>Facilities</CardDescription>
+                    <CardDescription>Sites</CardDescription>
                     <CardTitle className="text-lg">{data.company.facility_count}</CardTitle>
                   </CardHeader>
+                </Card>
+              </div>
+
+              <div>
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Account Client Users</CardTitle>
+                    <CardDescription>List of client users who currently have access to this account.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div>
+                      <p className="mb-2 text-xs text-muted-foreground">Client users already added to this account</p>
+                      {data.clientAccessUsers.length > 0 ? (
+                        <div className="space-y-2">
+                          {data.clientAccessUsers.map((user) => (
+                            <div key={user.user_id} className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2">
+                              <div>
+                                <p className="text-sm font-medium">{getClientDisplayName(user)}</p>
+                                <p className="text-xs text-muted-foreground">{user.employee_id} - {getClientDisplayEmail(user)}</p>
+                              </div>
+                              <TooltipIconButton className="h-8 w-8 hover:text-destructive" tooltip="Remove access" onClick={() => void onRevokeClientAccess(user.user_id)}>
+                                <Trash2 className="h-4 w-4" />
+                              </TooltipIconButton>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No client users are currently shared on this account.</p>
+                      )}
+                    </div>
+
+                    <div className="flex justify-end">
+                      <Button type="button" className="h-9 px-3" onClick={() => setIsAddClientUsersOpen(true)}>
+                        <UserPlus className="mr-2 h-4 w-4" />
+                        Add Users
+                      </Button>
+                    </div>
+                  </CardContent>
                 </Card>
               </div>
 
               <div className="space-y-3 rounded-md border border-border/70 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h3 className="text-base font-semibold">Facilities</h3>
-                    <p className="text-xs text-muted-foreground">Detailed facility list with scoped user counts. Open a facility for deeper details.</p>
+                    <h3 className="text-base font-semibold">Sites</h3>
+                    <p className="text-xs text-muted-foreground">Single-click selects a row. Double-click opens site details.</p>
                   </div>
                   <Button className="inline-flex h-9 items-center justify-center gap-2 px-3" onClick={() => openFacilityModal()}>
                     <Plus className="h-4 w-4" />
@@ -424,10 +652,10 @@ export default function ClientDetailsPage() {
                 </div>
 
                 <div className="relative">
-                  <Input value={facilitySearch} onChange={(event) => setFacilitySearch(event.target.value)} className="h-9" placeholder="Search facilities" />
+                  <Input value={facilitySearch} onChange={(event) => setFacilitySearch(event.target.value)} className="h-9" placeholder="Search sites" />
                 </div>
 
-                <div className="overflow-x-auto rounded-md border border-border/70">
+                <div ref={sitesTableRef} className="overflow-x-auto rounded-md border border-border/70">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b bg-muted/40">
@@ -458,7 +686,6 @@ export default function ClientDetailsPage() {
                         <th className="p-3 text-left">L1</th>
                         <th className="p-3 text-left">L2</th>
                         <th className="p-3 text-left">L3</th>
-                        <th className="p-3 text-left">Client</th>
                         <th className="p-3 text-left">Status</th>
                         <th className="p-3 text-left">
                           <button type="button" onClick={() => onFacilitySort('created_at')} className={sortButtonClass(facilitySortKey === 'created_at')}>
@@ -470,8 +697,13 @@ export default function ClientDetailsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {pagedFacilities.map((facility) => (
-                        <tr key={facility.id} className="group border-b transition-colors hover:bg-muted/20">
+                      {pagedFacilities.map((facility, rowIndex) => (
+                        <tr
+                          key={facility.id}
+                          className={`group border-b transition-colors ${selectedFacilityIds.includes(facility.id) ? 'bg-muted/25 ring-1 ring-inset ring-border/70' : 'hover:bg-muted/20'}`}
+                          onClick={(event) => onSelectFacilityRow(facility.id, rowIndex, { shift: event.shiftKey, multi: event.ctrlKey || event.metaKey })}
+                          onDoubleClick={() => navigate(`/admin/clients/${companyId}/facilities/${facility.id}`, { state: { from: `${location.pathname}${location.search}` } })}
+                        >
                           <td className="p-3">{facility.facility_code}</td>
                           <td className="p-3">{facility.facility_name}</td>
                           <td className="p-3 text-muted-foreground">{facility.city}</td>
@@ -479,21 +711,17 @@ export default function ClientDetailsPage() {
                           <td className="p-3 text-muted-foreground">{facility.l1_user_count}</td>
                           <td className="p-3 text-muted-foreground">{facility.l2_user_count}</td>
                           <td className="p-3 text-muted-foreground">{facility.l3_user_count}</td>
-                          <td className="p-3 text-muted-foreground">{facility.client_user_count}</td>
                           <td className="p-3">{facility.is_active ? 'Active' : 'Inactive'}</td>
                           <td className="p-3 text-muted-foreground">{new Date(facility.created_at).toLocaleString()}</td>
                           <td className="p-3">
                             <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
-                              <TooltipIconButton className="h-7 w-7" onClick={() => navigate(`/admin/facilities/${facility.id}`)} tooltip="Open facility page">
+                              <TooltipIconButton className="h-7 w-7" onClick={() => navigate(`/admin/clients/${companyId}/facilities/${facility.id}`, { state: { from: `${location.pathname}${location.search}` } })} tooltip="Open site details">
                                 <Eye className="h-4 w-4" />
                               </TooltipIconButton>
-                              <TooltipIconButton className="h-7 w-7" onClick={() => openFacilityModal(facility)} tooltip="Edit facility">
-                                <Pencil className="h-4 w-4" />
-                              </TooltipIconButton>
-                              <TooltipIconButton className="h-7 w-7" onClick={() => void onToggleFacility(facility)} tooltip="Toggle facility status">
+                              <TooltipIconButton className="h-7 w-7" onClick={() => void onToggleFacility(facility)} tooltip="Toggle site status">
                                 <Power className="h-4 w-4" />
                               </TooltipIconButton>
-                              <TooltipIconButton className="h-7 w-7 hover:text-destructive" onClick={() => openDeleteFacilityConfirm(facility)} tooltip="Delete facility">
+                              <TooltipIconButton className="h-7 w-7 hover:text-destructive" onClick={() => openDeleteFacilityConfirm(facility)} tooltip="Delete site">
                                 <Trash2 className="h-4 w-4" />
                               </TooltipIconButton>
                             </div>
@@ -520,29 +748,217 @@ export default function ClientDetailsPage() {
               </div>
             </>
           ) : (
-            <p className="text-sm text-muted-foreground">Client not found.</p>
+            <p className="text-sm text-muted-foreground">Account not found.</p>
           )}
         </CardContent>
       </Card>
+
+      {isEditCompanySidebarOpen && data ? (
+        <div className="fixed inset-0 z-[65] flex justify-end bg-black/35" onClick={() => setIsEditCompanySidebarOpen(false)}>
+          <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-border/70 bg-background p-6" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-6 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold">Edit Account</h2>
+                <p className="text-sm text-muted-foreground">Update account metadata and save.</p>
+              </div>
+              <Button variant="outline" size="icon" onClick={() => setIsEditCompanySidebarOpen(false)} aria-label="Close">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <form className="space-y-4" onSubmit={handleCompanySubmit(onUpdateCompany)}>
+              <div className="space-y-2">
+                <Label htmlFor="edit-companyName">Name</Label>
+                <Input id="edit-companyName" {...registerCompany('companyName')} />
+                {companyErrors.companyName ? <p className="text-xs text-destructive">{companyErrors.companyName.message}</p> : null}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-billingAddress">Billing Address</Label>
+                <Input id="edit-billingAddress" {...registerCompany('billingAddress')} />
+                {companyErrors.billingAddress ? <p className="text-xs text-destructive">{companyErrors.billingAddress.message}</p> : null}
+              </div>
+              <div className="space-y-2 rounded-md border border-border/70 bg-muted/20 p-3">
+                <p className="text-xs text-muted-foreground">Account Logo</p>
+                <div className="flex flex-wrap items-center gap-3">
+                  {data.company.logo_url ? (
+                    <img src={data.company.logo_url} alt={data.company.company_name} className="h-12 w-12 rounded-full border border-border object-cover" />
+                  ) : (
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full border border-border bg-muted text-sm font-semibold">
+                      {data.company.company_name.slice(0, 1).toUpperCase()}
+                    </div>
+                  )}
+                  <input
+                    ref={logoInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0]
+                      if (!file) return
+                      void onUploadCompanyLogo(file)
+                      event.currentTarget.value = ''
+                    }}
+                  />
+                  <Button type="button" variant="outline" className="h-9 px-3" onClick={() => logoInputRef.current?.click()}>
+                    <Upload className="mr-2 h-4 w-4" />
+                    Upload Logo
+                  </Button>
+                  {data.company.logo_url ? (
+                    <Button type="button" variant="outline" className="h-9 px-3" onClick={() => void onRemoveCompanyLogo()}>
+                      Remove Logo
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setIsEditCompanySidebarOpen(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" className="h-9 px-3" disabled={!isCompanyDirty || updateCompanyMutation.isPending}>
+                  {updateCompanyMutation.isPending ? 'Saving...' : 'Save'}
+                </Button>
+              </div>
+            </form>
+          </aside>
+        </div>
+      ) : null}
+
+      {isAddClientUsersOpen ? (
+        <div className="fixed inset-0 z-[66] flex items-center justify-center bg-black/45 p-4" onClick={() => setIsAddClientUsersOpen(false)}>
+          <Card className="max-h-[90vh] w-full max-w-4xl overflow-visible" onClick={(event) => event.stopPropagation()}>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle>Add Client Users</CardTitle>
+                <CardDescription>Only client users without current access to this account are listed.</CardDescription>
+              </div>
+              <Button type="button" variant="outline" size="icon" onClick={() => setIsAddClientUsersOpen(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </CardHeader>
+            <CardContent className="max-h-[70vh] space-y-4 overflow-y-auto">
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    value={clientUserSearch}
+                    onChange={(event) => setClientUserSearch(event.target.value)}
+                    placeholder="Search by id, name, email"
+                    className="h-9 pl-9"
+                  />
+                </div>
+                <SearchableSelect
+                  value={clientUserCompanyFilter}
+                  onChange={(value) => {
+                    setClientUserCompanyFilter(value)
+                    setClientUserFacilityFilter('ALL')
+                  }}
+                  options={[{ value: 'ALL', label: 'All accounts' }, ...companies.map((company) => ({ value: company.id, label: company.label }))]}
+                  placeholder="All accounts"
+                />
+                <SearchableSelect
+                  value={clientUserFacilityFilter}
+                  onChange={(value) => setClientUserFacilityFilter(value)}
+                  options={clientUserFacilityOptions}
+                  placeholder="All sites"
+                />
+              </div>
+
+              <div className="overflow-x-auto rounded-md border border-border/70">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/40">
+                      <th className="w-10 p-3 text-left" />
+                      <th className="p-3 text-left">User ID</th>
+                      <th className="p-3 text-left">Name</th>
+                      <th className="p-3 text-left">Email</th>
+                      <th className="p-3 text-left">Account</th>
+                      <th className="p-3 text-left">Site</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pagedClientUsers.map((user) => (
+                      <tr
+                        key={user.id}
+                        className={`cursor-pointer border-b hover:bg-muted/20 ${selectedClientCandidateIds.includes(user.id) ? 'bg-muted/25' : ''}`}
+                        onClick={() => {
+                          setSelectedClientCandidateIds((prev) => (
+                            prev.includes(user.id)
+                              ? prev.filter((id) => id !== user.id)
+                              : [...prev, user.id]
+                          ))
+                        }}
+                      >
+                        <td className="p-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedClientCandidateIds.includes(user.id)}
+                            onClick={(event) => event.stopPropagation()}
+                            onChange={() => {
+                              setSelectedClientCandidateIds((prev) => (
+                                prev.includes(user.id)
+                                  ? prev.filter((id) => id !== user.id)
+                                  : [...prev, user.id]
+                              ))
+                            }}
+                            className="table-select-checkbox"
+                          />
+                        </td>
+                        <td className="p-3 text-muted-foreground">{user.user_id}</td>
+                        <td className="p-3">{user.full_name || user.email || user.user_id}</td>
+                        <td className="p-3 text-muted-foreground">{user.email}</td>
+                        <td className="p-3 text-muted-foreground">{companies.find((company) => company.id === user.company_id)?.label ?? '-'}</td>
+                        <td className="p-3 text-muted-foreground">{facilities.find((site) => site.id === user.facility_id)?.label ?? '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground">Showing {pagedClientUsers.length} of {candidateClientUsers.length}</p>
+                <div className="flex items-center gap-2">
+                  <PageSizeSelect value={clientUserPageSize} onChange={setClientUserPageSize} />
+                  <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setClientUserPage((prev) => Math.max(1, prev - 1))} disabled={clientUserPage <= 1}>
+                    Prev
+                  </Button>
+                  <span className="text-sm text-muted-foreground">{clientUserPage} / {totalClientUserPages}</span>
+                  <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setClientUserPage((prev) => Math.min(totalClientUserPages, prev + 1))} disabled={clientUserPage >= totalClientUserPages}>
+                    Next
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setIsAddClientUsersOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  className="h-9 px-3"
+                  onClick={() => void onGrantClientAccess()}
+                  disabled={selectedClientCandidateIds.length === 0 || grantCompanyClientAccessMutation.isPending}
+                >
+                  {grantCompanyClientAccessMutation.isPending ? 'Adding...' : 'Add Selected'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
 
       {isFacilityModalOpen ? (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-4" onClick={() => setIsFacilityModalOpen(false)}>
           <Card className="w-full max-w-3xl" onClick={(event) => event.stopPropagation()}>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle>{editingFacility ? 'Edit Facility' : 'New Facility'}</CardTitle>
+                <CardTitle>{editingFacility ? 'Edit Site' : 'New Site'}</CardTitle>
                 <CardDescription>{data?.company.company_name}</CardDescription>
               </div>
               <Button className="h-9 px-3" type="button" variant="outline" onClick={() => setIsFacilityModalOpen(false)}>Close</Button>
             </CardHeader>
             <CardContent>
               <form className="grid gap-4 md:grid-cols-3" onSubmit={handleFacilitySubmit(onSaveFacility)}>
-                <div className="space-y-2">
-                  <Label htmlFor="facilityCode">Facility ID (optional)</Label>
-                  <Input id="facilityCode" placeholder="Auto" readOnly={Boolean(editingFacility)} className={editingFacility ? 'cursor-not-allowed opacity-70' : ''} {...registerFacility('facilityCode')} />
-                  {facilityErrors.facilityCode ? <p className="text-xs text-destructive">{facilityErrors.facilityCode.message}</p> : null}
-                </div>
-                <div className="space-y-2 md:col-span-2">
+                <div className="space-y-2 md:col-span-3">
                   <Label htmlFor="facilityName">Name</Label>
                   <Input id="facilityName" {...registerFacility('facilityName')} />
                   {facilityErrors.facilityName ? <p className="text-xs text-destructive">{facilityErrors.facilityName.message}</p> : null}
@@ -584,13 +1000,13 @@ export default function ClientDetailsPage() {
           <Card className="w-full max-w-md" onClick={(event) => event.stopPropagation()}>
             <CardHeader>
               <CardTitle>Confirm Permanent Delete</CardTitle>
-              <CardDescription>Type {deleteTargetFacility.facility_code} to permanently delete this facility.</CardDescription>
+              <CardDescription>Type {deleteTargetFacility.facility_code} to permanently delete this site.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <Input
                 value={deleteFacilityConfirmInput}
                 onChange={(event) => setDeleteFacilityConfirmInput(event.target.value)}
-                placeholder="Enter Facility ID"
+                placeholder="Enter Site ID"
               />
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setIsDeleteFacilityConfirmOpen(false)}>
@@ -616,13 +1032,13 @@ export default function ClientDetailsPage() {
           <Card className="w-full max-w-md" onClick={(event) => event.stopPropagation()}>
             <CardHeader>
               <CardTitle>Confirm Permanent Delete</CardTitle>
-              <CardDescription>Type {data.company.company_code} to permanently delete this client and all child facilities.</CardDescription>
+              <CardDescription>Type {data.company.company_code} to permanently delete this account and all child sites.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <Input
                 value={deleteCompanyConfirmInput}
                 onChange={(event) => setDeleteCompanyConfirmInput(event.target.value)}
-                placeholder="Enter Client ID"
+                placeholder="Enter Account ID"
               />
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setIsDeleteCompanyConfirmOpen(false)}>

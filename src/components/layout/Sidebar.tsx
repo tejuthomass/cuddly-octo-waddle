@@ -50,7 +50,7 @@ function navItemsByRole(role: AppRole): NavItem[] {
         icon: Users,
       },
       {
-        label: 'Clients',
+        label: 'Accounts',
         to: '/admin/clients',
         icon: Building2,
       },

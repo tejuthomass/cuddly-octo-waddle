@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -42,6 +42,7 @@ function sortButtonClass(active: boolean) {
 
 export default function ClientManagementPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { data: companies = [], isLoading: companiesLoading } = useAdminCompanies()
   const createCompanyMutation = useCreateCompany()
   const toggleCompanyMutation = useToggleCompanyActive()
@@ -53,11 +54,13 @@ export default function ClientManagementPage() {
   const [companyPage, setCompanyPage] = useState(1)
   const [companyPageSize, setCompanyPageSize] = useState(10)
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([])
+  const [lastSelectedCompanyIndex, setLastSelectedCompanyIndex] = useState<number | null>(null)
 
   const [isCompanyOpen, setIsCompanyOpen] = useState(false)
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false)
   const [deleteConfirmInput, setDeleteConfirmInput] = useState('')
   const [deleteTargetCompany, setDeleteTargetCompany] = useState<AdminCompanyRow | null>(null)
+  const tableContainerRef = useRef<HTMLDivElement | null>(null)
 
   const {
     register,
@@ -133,38 +136,63 @@ export default function ClientManagementPage() {
     setSelectedCompanyIds(filteredCompanies.map((row) => row.id))
   }
 
+  const onSelectCompanyRow = (companyId: string, rowIndex: number, options: { shift: boolean; multi: boolean }) => {
+    if (options.shift && lastSelectedCompanyIndex !== null) {
+      const start = Math.min(lastSelectedCompanyIndex, rowIndex)
+      const end = Math.max(lastSelectedCompanyIndex, rowIndex)
+      const rangeIds = pagedCompanies.slice(start, end + 1).map((row) => row.id)
+
+      setSelectedCompanyIds((prev) => {
+        if (options.multi) {
+          return Array.from(new Set([...prev, ...rangeIds]))
+        }
+        return rangeIds
+      })
+      return
+    }
+
+    if (options.multi) {
+      setSelectedCompanyIds((prev) => (prev.includes(companyId) ? prev.filter((id) => id !== companyId) : [...prev, companyId]))
+      setLastSelectedCompanyIndex(rowIndex)
+      return
+    }
+
+    setSelectedCompanyIds([companyId])
+    setLastSelectedCompanyIndex(rowIndex)
+  }
+
   const onBulkToggleCompanies = async (isActive: boolean) => {
     if (selectedCompanies.length === 0) {
-      toast.error('No clients selected for this action.')
+      toast.error('No accounts selected for this action.')
       return
     }
 
     try {
       await Promise.all(selectedCompanies.map((company) => toggleCompanyMutation.mutateAsync({ companyId: company.id, isActive })))
-      toast.success(isActive ? 'Selected clients activated.' : 'Selected clients deactivated.')
+      toast.success(isActive ? 'Selected accounts activated.' : 'Selected accounts deactivated.')
       setSelectedCompanyIds([])
     } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to update selected client statuses.'))
+      toast.error(toHumanErrorMessage(error, 'Unable to update selected account statuses.'))
     }
   }
 
   const onToggleCompanyInline = async (company: AdminCompanyRow) => {
     try {
       await toggleCompanyMutation.mutateAsync({ companyId: company.id, isActive: !company.is_active })
-      toast.success(!company.is_active ? 'Client enabled.' : 'Client disabled.')
+      toast.success(!company.is_active ? 'Account enabled.' : 'Account disabled.')
     } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to update client status.'))
+      toast.error(toHumanErrorMessage(error, 'Unable to update account status.'))
     }
   }
 
   const onCreateCompany = async (values: CreateCompanyFormValues) => {
     try {
       await createCompanyMutation.mutateAsync(values)
-      toast.success('Client created.')
+      toast.success('Account created.')
       setIsCompanyOpen(false)
       reset()
     } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to create client.'))
+      toast.error(toHumanErrorMessage(error, 'Unable to create account.'))
     }
   }
 
@@ -178,18 +206,18 @@ export default function ClientManagementPage() {
     if (!deleteTargetCompany) return
 
     if (deleteConfirmInput.trim() !== deleteTargetCompany.company_code) {
-      toast.error('Type the exact Client ID to confirm deletion.')
+      toast.error('Type the exact Account ID to confirm deletion.')
       return
     }
 
     try {
       await deleteCompanyMutation.mutateAsync({ companyId: deleteTargetCompany.id })
-      toast.success('Client permanently deleted.')
+      toast.success('Account permanently deleted.')
       setDeleteConfirmInput('')
       setDeleteTargetCompany(null)
       setIsDeleteConfirmOpen(false)
     } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to delete client.'))
+      toast.error(toHumanErrorMessage(error, 'Unable to delete account.'))
     }
   }
 
@@ -212,14 +240,29 @@ export default function ClientManagementPage() {
     setSelectedCompanyIds((prev) => prev.filter((id) => filteredCompanies.some((row) => row.id === id)))
   }, [filteredCompanies])
 
+  useEffect(() => {
+    const onDocumentPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (tableContainerRef.current?.contains(target)) return
+
+      setSelectedCompanyIds([])
+      setLastSelectedCompanyIndex(null)
+    }
+
+    document.addEventListener('mousedown', onDocumentPointerDown)
+    return () => {
+      document.removeEventListener('mousedown', onDocumentPointerDown)
+    }
+  }, [])
+
   return (
     <main className="space-y-6 p-6">
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <CardTitle className="text-2xl tracking-tight">Clients</CardTitle>
-              <CardDescription>Create, search, sort, and open full client details.</CardDescription>
+              <CardTitle className="text-2xl tracking-tight">Accounts</CardTitle>
+              <CardDescription>Create, search, sort, and open full account details.</CardDescription>
             </div>
             <Button className="inline-flex h-9 items-center justify-center gap-2 px-3" onClick={() => setIsCompanyOpen(true)}>
               <Plus className="h-4 w-4" />
@@ -236,10 +279,10 @@ export default function ClientManagementPage() {
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/10 p-2.5">
             <p className="px-1 text-sm text-muted-foreground">{selectedCompanies.length} selected</p>
             <div className="flex items-center gap-1.5">
-              <TooltipIconButton className="h-8 w-8" onClick={() => void onBulkToggleCompanies(true)} disabled={selectedCompanies.length === 0} tooltip="Activate selected clients">
+              <TooltipIconButton className="h-8 w-8" onClick={() => void onBulkToggleCompanies(true)} disabled={selectedCompanies.length === 0} tooltip="Activate selected accounts">
                 <Power className="h-4 w-4" />
               </TooltipIconButton>
-              <TooltipIconButton className="h-8 w-8" onClick={() => void onBulkToggleCompanies(false)} disabled={selectedCompanies.length === 0} tooltip="Deactivate selected clients">
+              <TooltipIconButton className="h-8 w-8" onClick={() => void onBulkToggleCompanies(false)} disabled={selectedCompanies.length === 0} tooltip="Deactivate selected accounts">
                 <PowerOff className="h-4 w-4" />
               </TooltipIconButton>
             </div>
@@ -247,16 +290,16 @@ export default function ClientManagementPage() {
 
           {canSelectFiltered ? (
             <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-              All {pageCompanyIds.length} clients on this page are selected.
+              All {pageCompanyIds.length} accounts on this page are selected.
               <Button type="button" variant="link" className="h-auto px-1 text-sm" onClick={onSelectFilteredCompanies}>
-                Select all {filteredCompanies.length} clients
+                Select all {filteredCompanies.length} accounts
               </Button>
             </div>
           ) : null}
 
           {allFilteredSelected && selectedCompanyIds.length > 0 ? (
             <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-              All {filteredCompanies.length} clients are selected.
+              All {filteredCompanies.length} accounts are selected.
               <Button type="button" variant="link" className="h-auto px-1 text-sm" onClick={() => setSelectedCompanyIds([])}>
                 Clear selection
               </Button>
@@ -266,7 +309,7 @@ export default function ClientManagementPage() {
           {companiesLoading ? (
             <p className="text-sm text-muted-foreground">Loading...</p>
           ) : (
-            <div className="overflow-x-auto rounded-md border border-border/70">
+            <div ref={tableContainerRef} className="overflow-x-auto rounded-md border border-border/70">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/40">
@@ -287,7 +330,7 @@ export default function ClientManagementPage() {
                     </th>
                     <th className="p-3 text-left">
                       <button type="button" onClick={() => onCompanySort('company_code')} className={sortButtonClass(companySortKey === 'company_code')}>
-                        Client ID
+                        Account ID
                         {sortIcon(companySortKey === 'company_code', companySortDirection)}
                       </button>
                     </th>
@@ -297,7 +340,7 @@ export default function ClientManagementPage() {
                         {sortIcon(companySortKey === 'company_name', companySortDirection)}
                       </button>
                     </th>
-                    <th className="p-3 text-left">Facilities</th>
+                    <th className="p-3 text-left">Sites</th>
                     <th className="p-3 text-left">
                       <button type="button" onClick={() => onCompanySort('scoped_user_count')} className={sortButtonClass(companySortKey === 'scoped_user_count')}>
                         Users
@@ -315,16 +358,12 @@ export default function ClientManagementPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pagedCompanies.map((company) => (
+                  {pagedCompanies.map((company, rowIndex) => (
                     <tr
                       key={company.id}
-                      className="group border-b transition-colors hover:bg-muted/20"
-                      onDoubleClick={() => navigate(`/admin/clients/${company.id}`)}
-                      onClick={(event) => {
-                        if (event.ctrlKey || event.metaKey) {
-                          setSelectedCompanyIds((prev) => (prev.includes(company.id) ? prev.filter((id) => id !== company.id) : [...prev, company.id]))
-                        }
-                      }}
+                      className={`group border-b transition-colors ${selectedCompanyIds.includes(company.id) ? 'bg-muted/25 ring-1 ring-inset ring-border/70' : 'hover:bg-muted/20'}`}
+                      onDoubleClick={() => navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}` } })}
+                      onClick={(event) => onSelectCompanyRow(company.id, rowIndex, { shift: event.shiftKey, multi: event.ctrlKey || event.metaKey })}
                     >
                       <td className="p-3">
                         <button
@@ -334,7 +373,7 @@ export default function ClientManagementPage() {
                             event.stopPropagation()
                             setSelectedCompanyIds((prev) => (prev.includes(company.id) ? prev.filter((id) => id !== company.id) : [...prev, company.id]))
                           }}
-                          aria-label={`Select client ${company.company_code}`}
+                          aria-label={`Select account ${company.company_code}`}
                         >
                           <input
                             type="checkbox"
@@ -367,9 +406,9 @@ export default function ClientManagementPage() {
                             className="h-7 w-7"
                             onClick={(event) => {
                               event.stopPropagation()
-                              navigate(`/admin/clients/${company.id}`)
+                              navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}` } })
                             }}
-                            tooltip="Open client details"
+                            tooltip="Open account details"
                           >
                             <Eye className="h-4 w-4" />
                           </TooltipIconButton>
@@ -379,7 +418,7 @@ export default function ClientManagementPage() {
                               event.stopPropagation()
                               void onToggleCompanyInline(company)
                             }}
-                            tooltip="Toggle client status"
+                            tooltip="Toggle account status"
                           >
                             <Power className="h-4 w-4" />
                           </TooltipIconButton>
@@ -389,7 +428,7 @@ export default function ClientManagementPage() {
                               event.stopPropagation()
                               openDeleteCompanyConfirm(company)
                             }}
-                            tooltip="Delete client"
+                            tooltip="Delete account"
                           >
                             <Trash2 className="h-4 w-4" />
                           </TooltipIconButton>
@@ -423,8 +462,8 @@ export default function ClientManagementPage() {
           <Card className="w-full max-w-2xl">
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle>New Client</CardTitle>
-                <CardDescription>Create a client.</CardDescription>
+                <CardTitle>New Account</CardTitle>
+                <CardDescription>Create an account.</CardDescription>
               </div>
               <Button className="h-9 px-3" variant="outline" onClick={() => setIsCompanyOpen(false)}>Close</Button>
             </CardHeader>
@@ -458,7 +497,7 @@ export default function ClientManagementPage() {
             <CardHeader>
               <CardTitle>Confirm Permanent Delete</CardTitle>
               <CardDescription>
-                Type {deleteTargetCompany.company_code} to permanently delete this client and all child facilities.
+                Type {deleteTargetCompany.company_code} to permanently delete this account and all child sites.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -468,7 +507,7 @@ export default function ClientManagementPage() {
               <Input
                 value={deleteConfirmInput}
                 onChange={(event) => setDeleteConfirmInput(event.target.value)}
-                placeholder="Enter Client ID"
+                placeholder="Enter Account ID"
               />
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setIsDeleteConfirmOpen(false)}>

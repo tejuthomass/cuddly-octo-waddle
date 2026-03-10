@@ -65,7 +65,11 @@ function SettingsLayoutFrame() {
 }
 
 function PostLoginRedirect() {
-  const { user, activeContext } = useAuth()
+  const { user, activeContext, isHydrating } = useAuth()
+
+  if (isHydrating) {
+    return <RouteSkeleton />
+  }
 
   if (!user) {
     return <Navigate to="/login" replace />
@@ -79,7 +83,11 @@ function PostLoginRedirect() {
 }
 
 function LoginRedirectGuard() {
-  const { user, activeContext } = useAuth()
+  const { user, activeContext, isHydrating } = useAuth()
+
+  if (isHydrating) {
+    return <RouteSkeleton />
+  }
 
   if (!user) {
     return <LoginPage />
@@ -316,7 +324,7 @@ export const router = createBrowserRouter([
             ),
           },
           {
-            path: 'facilities/:facilityId',
+            path: 'clients/:companyId/facilities/:facilityId',
             element: (
               <LazyRoute>
                 <FacilityDetailsPage />

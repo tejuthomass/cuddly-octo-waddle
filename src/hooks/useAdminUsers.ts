@@ -17,6 +17,8 @@ export interface AdminUserRow {
   role_title: string | null
   company_id: string | null
   facility_id: string | null
+  company_ids: string[]
+  facility_ids: string[]
   is_l5_admin: boolean
 }
 
@@ -26,8 +28,8 @@ interface CreateUserPayload {
   phone: string
   roleCode: RoleCode
   roleTitle?: string
-  companyId?: string
-  facilityId?: string
+  companyIds?: string[]
+  facilityIds?: string[]
 }
 
 interface UpdateUserPayload {
@@ -37,8 +39,8 @@ interface UpdateUserPayload {
   phone: string
   roleCode: RoleCode
   roleTitle: string
-  companyId?: string
-  facilityId?: string
+  companyIds?: string[]
+  facilityIds?: string[]
 }
 
 const usersQueryKey = ['admin', 'users'] as const
@@ -49,7 +51,7 @@ const defaultRoleTitleByCode: Record<RoleCode, string> = {
   L3: 'Manager',
   L4: 'Management',
   L5: 'L5 Admin',
-  CLIENT: 'Client User',
+  CLIENT: 'Client',
 }
 
 function isGlobalRole(roleCode: RoleCode) {
@@ -120,29 +122,11 @@ async function upsertSingleRoleForUser(payload: { userId: string; roleCode: Role
   }
 }
 
-async function resolveCompanyIdFromFacility(facilityId: string | undefined): Promise<string | undefined> {
-  if (!facilityId) {
-    return undefined
-  }
-
-  const { data, error } = await supabase
-    .from('facilities')
-    .select('company_id')
-    .eq('id', facilityId)
-    .maybeSingle<{ company_id: string }>()
-
-  if (error) {
-    throw error
-  }
-
-  return data?.company_id
-}
-
 async function syncOptionalScopeMappings(payload: {
   userId: string
   roleCode: RoleCode
-  companyId?: string
-  facilityId?: string
+  companyIds?: string[]
+  facilityIds?: string[]
 }) {
   if (isGlobalRole(payload.roleCode)) {
     const [companyDeactivate, facilityDeactivate] = await Promise.all([
@@ -161,10 +145,12 @@ async function syncOptionalScopeMappings(payload: {
     return
   }
 
-  let effectiveCompanyId = payload.companyId
-  if (!effectiveCompanyId && payload.facilityId) {
-    effectiveCompanyId = await resolveCompanyIdFromFacility(payload.facilityId)
-  }
+  const normalizedCompanyIds = payload.roleCode === 'CLIENT'
+    ? Array.from(new Set((payload.companyIds ?? []).filter(Boolean)))
+    : []
+  const normalizedFacilityIds = payload.roleCode === 'L1' || payload.roleCode === 'L2' || payload.roleCode === 'L3'
+    ? Array.from(new Set((payload.facilityIds ?? []).filter(Boolean)))
+    : []
 
   const { error: deactivateCompaniesError } = await supabase
     .from('user_companies')
@@ -184,30 +170,28 @@ async function syncOptionalScopeMappings(payload: {
     throw deactivateFacilitiesError
   }
 
-  if (effectiveCompanyId) {
-    const { error: upsertCompanyError } = await supabase.from('user_companies').upsert(
-      {
-        user_id: payload.userId,
-        company_id: effectiveCompanyId,
-        is_active: true,
-      },
-      { onConflict: 'user_id,company_id' },
-    )
+  const companyRows = normalizedCompanyIds.map((companyId) => ({
+    user_id: payload.userId,
+    company_id: companyId,
+    is_active: true,
+  }))
+
+  if (companyRows.length > 0) {
+    const { error: upsertCompanyError } = await supabase.from('user_companies').upsert(companyRows, { onConflict: 'user_id,company_id' })
 
     if (upsertCompanyError) {
       throw upsertCompanyError
     }
   }
 
-  if (payload.facilityId) {
-    const { error: upsertFacilityError } = await supabase.from('user_facilities').upsert(
-      {
-        user_id: payload.userId,
-        facility_id: payload.facilityId,
-        is_active: true,
-      },
-      { onConflict: 'user_id,facility_id' },
-    )
+  const facilityRows = normalizedFacilityIds.map((facilityId) => ({
+    user_id: payload.userId,
+    facility_id: facilityId,
+    is_active: true,
+  }))
+
+  if (facilityRows.length > 0) {
+    const { error: upsertFacilityError } = await supabase.from('user_facilities').upsert(facilityRows, { onConflict: 'user_id,facility_id' })
 
     if (upsertFacilityError) {
       throw upsertFacilityError
@@ -277,22 +261,25 @@ export function useAdminUsers() {
         }
       })
 
-      const companyByUserId = new Map<string, string>()
+      const companyIdsByUserId = new Map<string, string[]>()
       ;(companiesResponse.data ?? []).forEach((row) => {
-        if (!companyByUserId.has(row.user_id)) {
-          companyByUserId.set(row.user_id, row.company_id)
-        }
+        const list = companyIdsByUserId.get(row.user_id) ?? []
+        list.push(row.company_id)
+        companyIdsByUserId.set(row.user_id, list)
       })
 
-      const facilityByUserId = new Map<string, string>()
+      const facilityIdsByUserId = new Map<string, string[]>()
       ;(facilitiesResponse.data ?? []).forEach((row) => {
-        if (!facilityByUserId.has(row.user_id)) {
-          facilityByUserId.set(row.user_id, row.facility_id)
-        }
+        const list = facilityIdsByUserId.get(row.user_id) ?? []
+        list.push(row.facility_id)
+        facilityIdsByUserId.set(row.user_id, list)
       })
 
       return (profilesResponse.data ?? []).map((profile) => {
         const role = roleByUserId.get(profile.id)
+
+        const companyIds = companyIdsByUserId.get(profile.id) ?? []
+        const facilityIds = facilityIdsByUserId.get(profile.id) ?? []
 
         return {
           id: profile.id,
@@ -305,8 +292,10 @@ export function useAdminUsers() {
           created_at: profile.created_at,
           role_code: role?.role_code ?? null,
           role_title: role?.role_title ?? null,
-          company_id: companyByUserId.get(profile.id) ?? null,
-          facility_id: facilityByUserId.get(profile.id) ?? null,
+          company_id: companyIds[0] ?? null,
+          facility_id: facilityIds[0] ?? null,
+          company_ids: companyIds,
+          facility_ids: facilityIds,
           is_l5_admin: role?.role_code === 'L5',
         } as AdminUserRow
       })
@@ -362,6 +351,20 @@ export function useToggleUserActive() {
       if (error) {
         throw error
       }
+
+      const { data: verifyRow, error: verifyError } = await supabase
+        .from('profiles')
+        .select('id, is_active')
+        .eq('id', payload.userId)
+        .maybeSingle<{ id: string; is_active: boolean }>()
+
+      if (verifyError) {
+        throw verifyError
+      }
+
+      if (!verifyRow || verifyRow.is_active !== payload.isActive) {
+        throw new Error('Status update was not applied. Check admin permissions and row-level policies.')
+      }
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: usersQueryKey })
@@ -397,8 +400,8 @@ export function useCreateAdminUser() {
       await syncOptionalScopeMappings({
         userId,
         roleCode: payload.roleCode,
-        companyId: payload.companyId,
-        facilityId: payload.facilityId,
+        companyIds: payload.companyIds,
+        facilityIds: payload.facilityIds,
       })
 
       return data
@@ -436,8 +439,8 @@ export function useUpdateAdminUser() {
       await syncOptionalScopeMappings({
         userId: payload.userId,
         roleCode: payload.roleCode,
-        companyId: payload.companyId,
-        facilityId: payload.facilityId,
+        companyIds: payload.companyIds,
+        facilityIds: payload.facilityIds,
       })
     },
     onSuccess: async () => {
@@ -463,6 +466,22 @@ export function useHardDeleteUser() {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: usersQueryKey })
+    },
+  })
+}
+
+export function useResetAdminUserPassword() {
+  return useMutation({
+    mutationFn: async (payload: { userId: string }) => {
+      const { error } = await supabase.functions.invoke('admin-reset-user-password', {
+        body: {
+          user_id: payload.userId,
+        },
+      })
+
+      if (error) {
+        await parseFunctionInvokeError(error)
+      }
     },
   })
 }

@@ -11,26 +11,34 @@ export interface SearchableSelectOption {
 
 interface SearchableSelectProps {
   value: string
+  values?: string[]
   options: SearchableSelectOption[]
   onChange: (value: string) => void
+  onValuesChange?: (values: string[]) => void
   placeholder?: string
   searchPlaceholder?: string
   className?: string
   disabled?: boolean
   minDropdownWidth?: number
+  multiSelect?: boolean
+  wrapOptions?: boolean
   renderSelectedLabel?: (option: SearchableSelectOption | undefined) => string
   renderOption?: (option: SearchableSelectOption, isSelected: boolean) => React.ReactNode
 }
 
 export function SearchableSelect({
   value,
+  values,
   options,
   onChange,
+  onValuesChange,
   placeholder = 'Select',
   searchPlaceholder = 'Search...',
   className,
   disabled = false,
   minDropdownWidth,
+  multiSelect = false,
+  wrapOptions = false,
   renderSelectedLabel,
   renderOption,
 }: SearchableSelectProps) {
@@ -39,6 +47,7 @@ export function SearchableSelect({
   const rootRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
   const [menuPosition, setMenuPosition] = useState<{ left: number; top: number; width: number }>({ left: 0, top: 0, width: 0 })
 
   const updateMenuPosition = () => {
@@ -71,6 +80,12 @@ export function SearchableSelect({
     if (!open) return
     updateMenuPosition()
 
+    window.setTimeout(() => {
+      searchInputRef.current?.focus()
+      const endPos = searchInputRef.current?.value.length ?? 0
+      searchInputRef.current?.setSelectionRange(endPos, endPos)
+    }, 0)
+
     const onResize = () => updateMenuPosition()
     const onScroll = () => updateMenuPosition()
 
@@ -84,6 +99,9 @@ export function SearchableSelect({
   }, [open, minDropdownWidth])
 
   const selected = options.find((option) => option.value === value)
+  const selectedValues = values ?? []
+  const selectedOptions = options.filter((option) => selectedValues.includes(option.value))
+  const selectedSummary = selectedOptions.map((option) => option.label).join(', ')
 
   const filteredOptions = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -103,6 +121,19 @@ export function SearchableSelect({
         ref={triggerRef}
         type="button"
         disabled={disabled}
+        onKeyDown={(event) => {
+          if (disabled) return
+          if (event.ctrlKey || event.metaKey || event.altKey) return
+
+          const isPrintable = event.key.length === 1 && !event.key.match(/\s/)?.length === false
+          if (isPrintable || event.key === 'Backspace') {
+            event.preventDefault()
+            const initialQuery = event.key === 'Backspace' ? '' : event.key
+            setOpen(true)
+            setQuery(initialQuery)
+            setTimeout(updateMenuPosition, 0)
+          }
+        }}
         onClick={() => {
           setOpen((prev) => !prev)
           setQuery('')
@@ -114,10 +145,12 @@ export function SearchableSelect({
           disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
         )}
       >
-        <span className={cn('truncate', !selected && 'text-muted-foreground')}>
-          {selected ? (renderSelectedLabel ? renderSelectedLabel(selected) : selected.label) : placeholder}
+        <span className={cn('truncate', multiSelect ? selectedValues.length === 0 && 'text-muted-foreground' : !selected && 'text-muted-foreground')} title={multiSelect ? selectedSummary : selected?.label}>
+          {multiSelect
+            ? (selectedValues.length > 0 ? `${selectedValues.length} selected` : placeholder)
+            : (selected ? (renderSelectedLabel ? renderSelectedLabel(selected) : selected.label) : placeholder)}
         </span>
-        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+        <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform duration-150', open && 'rotate-180')} />
       </button>
 
       {open
@@ -135,6 +168,7 @@ export function SearchableSelect({
           <div className="mb-2 flex items-center gap-2 rounded-md border border-input bg-background px-2">
             <Search className="h-4 w-4 text-muted-foreground" />
             <input
+              ref={searchInputRef}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={searchPlaceholder}
@@ -150,18 +184,32 @@ export function SearchableSelect({
                   key={`${option.value}-${option.label}-${index}`}
                   type="button"
                   onClick={() => {
+                    if (multiSelect) {
+                      if (!onValuesChange) return
+                      const exists = selectedValues.includes(option.value)
+                      const next = exists
+                        ? selectedValues.filter((item) => item !== option.value)
+                        : [...selectedValues, option.value]
+                      onValuesChange(next)
+                      return
+                    }
+
                     onChange(option.value)
                     setOpen(false)
                   }}
                   className={cn(
                     'flex w-full items-center justify-between rounded px-2 py-2 text-left text-sm',
-                    option.value === value ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60',
+                    (multiSelect ? selectedValues.includes(option.value) : option.value === value)
+                      ? 'bg-accent text-accent-foreground'
+                      : 'hover:bg-accent/60',
                   )}
                 >
-                  <span className="truncate">
-                    {renderOption ? renderOption(option, option.value === value) : option.label}
+                  <span className={cn(wrapOptions ? 'whitespace-normal break-words pr-2' : 'truncate')}>
+                    {renderOption
+                      ? renderOption(option, multiSelect ? selectedValues.includes(option.value) : option.value === value)
+                      : option.label}
                   </span>
-                  {option.value === value ? <Check className="h-4 w-4" /> : null}
+                  {(multiSelect ? selectedValues.includes(option.value) : option.value === value) ? <Check className="h-4 w-4" /> : null}
                 </button>
               ))
             )}
