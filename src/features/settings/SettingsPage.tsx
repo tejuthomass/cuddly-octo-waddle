@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Moon, Monitor, Sun } from 'lucide-react'
 import { toast } from 'sonner'
@@ -43,6 +43,9 @@ interface SettingsLocationState {
   from?: string
 }
 
+const PREVIEW_TARGET = 256
+const EXPORT_TARGET = 512
+
 export default function SettingsPage() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -80,32 +83,47 @@ export default function SettingsPage() {
     return emailLocal.slice(0, 2).toUpperCase()
   }, [profile?.email, profile?.full_name])
 
-  const renderPreview = () => {
+  const maxOffsets = useMemo(() => {
+    if (!imageElement) return { x: 0, y: 0 }
+    const baseScale = Math.max(PREVIEW_TARGET / imageElement.width, PREVIEW_TARGET / imageElement.height)
+    const scaledWidth = imageElement.width * baseScale * zoom
+    const scaledHeight = imageElement.height * baseScale * zoom
+    return {
+      x: Math.max(0, Math.floor((scaledWidth - PREVIEW_TARGET) / 2)),
+      y: Math.max(0, Math.floor((scaledHeight - PREVIEW_TARGET) / 2)),
+    }
+  }, [imageElement, zoom])
+
+  useEffect(() => {
+    setOffsetX((x) => Math.max(-maxOffsets.x, Math.min(maxOffsets.x, x)))
+    setOffsetY((y) => Math.max(-maxOffsets.y, Math.min(maxOffsets.y, y)))
+  }, [maxOffsets])
+
+  const renderPreview = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas || !imageElement) return
 
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const target = 256
-    canvas.width = target
-    canvas.height = target
+    canvas.width = PREVIEW_TARGET
+    canvas.height = PREVIEW_TARGET
 
-    ctx.clearRect(0, 0, target, target)
+    ctx.clearRect(0, 0, PREVIEW_TARGET, PREVIEW_TARGET)
 
-    const baseScale = Math.max(target / imageElement.width, target / imageElement.height)
+    const baseScale = Math.max(PREVIEW_TARGET / imageElement.width, PREVIEW_TARGET / imageElement.height)
     const scaledWidth = imageElement.width * baseScale * zoom
     const scaledHeight = imageElement.height * baseScale * zoom
 
-    const dx = (target - scaledWidth) / 2 + offsetX
-    const dy = (target - scaledHeight) / 2 + offsetY
+    const dx = (PREVIEW_TARGET - scaledWidth) / 2 + offsetX
+    const dy = (PREVIEW_TARGET - scaledHeight) / 2 + offsetY
 
     ctx.drawImage(imageElement, dx, dy, scaledWidth, scaledHeight)
-  }
+  }, [imageElement, zoom, offsetX, offsetY])
 
   useEffect(() => {
     renderPreview()
-  }, [imageElement, zoom, offsetX, offsetY])
+  }, [renderPreview])
 
   useEffect(() => {
     return () => {
@@ -140,9 +158,8 @@ export default function SettingsPage() {
     if (!imageElement) return
 
     const exportCanvas = document.createElement('canvas')
-    const target = 512
-    exportCanvas.width = target
-    exportCanvas.height = target
+    exportCanvas.width = EXPORT_TARGET
+    exportCanvas.height = EXPORT_TARGET
     const ctx = exportCanvas.getContext('2d')
 
     if (!ctx) {
@@ -150,14 +167,15 @@ export default function SettingsPage() {
       return
     }
 
-    const baseScale = Math.max(target / imageElement.width, target / imageElement.height)
+    const offsetScale = EXPORT_TARGET / PREVIEW_TARGET
+    const baseScale = Math.max(EXPORT_TARGET / imageElement.width, EXPORT_TARGET / imageElement.height)
     const scaledWidth = imageElement.width * baseScale * zoom
     const scaledHeight = imageElement.height * baseScale * zoom
 
-    const dx = (target - scaledWidth) / 2 + offsetX * 2
-    const dy = (target - scaledHeight) / 2 + offsetY * 2
+    const dx = (EXPORT_TARGET - scaledWidth) / 2 + offsetX * offsetScale
+    const dy = (EXPORT_TARGET - scaledHeight) / 2 + offsetY * offsetScale
 
-    ctx.clearRect(0, 0, target, target)
+    ctx.clearRect(0, 0, EXPORT_TARGET, EXPORT_TARGET)
     ctx.drawImage(imageElement, dx, dy, scaledWidth, scaledHeight)
 
     const blob = await new Promise<Blob | null>((resolve) => {
@@ -285,7 +303,7 @@ export default function SettingsPage() {
                           <div className="flex flex-wrap items-start gap-6">
                             <div className="space-y-2">
                               <p className="text-sm font-medium">Preview</p>
-                              <canvas ref={canvasRef} className="h-40 w-40 rounded-full border border-border object-cover" />
+                              <canvas ref={canvasRef} style={{ width: PREVIEW_TARGET, height: PREVIEW_TARGET }} className="rounded-full border border-border" />
                             </div>
                             <div className="min-w-[240px] flex-1 space-y-3">
                               <div className="space-y-1">
@@ -294,11 +312,11 @@ export default function SettingsPage() {
                               </div>
                               <div className="space-y-1">
                                 <Label htmlFor="offsetX" className="text-sm">Left / Right</Label>
-                                <Input id="offsetX" type="range" min={-120} max={120} step={1} value={offsetX} onChange={(e) => setOffsetX(Number(e.target.value))} className="h-9" />
+                                <Input id="offsetX" type="range" min={-maxOffsets.x} max={maxOffsets.x} step={1} value={offsetX} onChange={(e) => setOffsetX(Number(e.target.value))} className="h-9" disabled={maxOffsets.x === 0} />
                               </div>
                               <div className="space-y-1">
                                 <Label htmlFor="offsetY" className="text-sm">Up / Down</Label>
-                                <Input id="offsetY" type="range" min={-120} max={120} step={1} value={offsetY} onChange={(e) => setOffsetY(Number(e.target.value))} className="h-9" />
+                                <Input id="offsetY" type="range" min={-maxOffsets.y} max={maxOffsets.y} step={1} value={offsetY} onChange={(e) => setOffsetY(Number(e.target.value))} className="h-9" disabled={maxOffsets.y === 0} />
                               </div>
                             </div>
                           </div>
