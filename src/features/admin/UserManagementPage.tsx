@@ -162,8 +162,9 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function getAvatarRenderMetrics(draft: AvatarDraft, imageSize: AvatarImageSize, viewportSize: number) {
-  // Calculate base scale to fit image in viewport while maintaining aspect ratio
-  const baseScale = Math.min(viewportSize / imageSize.width, viewportSize / imageSize.height)
+  // Use Math.max so the image always covers the viewport (no empty edges).
+  // The shortest side fills the viewport at zoom = 1 (max zoom-out).
+  const baseScale = Math.max(viewportSize / imageSize.width, viewportSize / imageSize.height)
   const zoom = clamp(draft.zoom, avatarZoomMin, avatarZoomMax)
   const scale = baseScale * zoom
   
@@ -179,17 +180,15 @@ function getAvatarRenderMetrics(draft: AvatarDraft, imageSize: AvatarImageSize, 
   const panXClamped = clamp(draft.panX, -100, 100)
   const panYClamped = clamp(draft.panY, -100, 100)
   
-  // Calculate position
-  // When panRoom = 0, center the image
-  // When panRoom > 0, pan from -panRoom/2 to +panRoom/2 based on normalized pan values
+  // Calculate position so the image always fills the viewport.
+  // panRoom = 0 means the image exactly fills this axis — center it.
+  // panRoom > 0 maps panX/Y (-100 … +100) to the full scrollable range.
   let left: number
   let top: number
   
   if (panRoomX === 0) {
     left = (viewportSize - drawWidth) / 2
   } else {
-    // panX: -100 (left edge) to +100 (right edge)
-    // Convert to: 0 (left edge) to panRoomX (right edge), centered at panRoomX/2
     const normalizedPan = (panXClamped + 100) / 200 // 0 to 1
     left = -normalizedPan * panRoomX
   }
@@ -485,6 +484,31 @@ export default function UserManagementPage() {
     avatarEditorViewportRef.current?.focus()
   }, [isAvatarEditorOpen])
 
+  // Attach a non-passive wheel listener so preventDefault() prevents the browser
+  // from zooming the page when the user Ctrl+scrolls inside the avatar editor.
+  useEffect(() => {
+    const viewport = avatarEditorViewportRef.current
+    if (!viewport || !isAvatarEditorOpen) return
+
+    const handleWheel = (event: WheelEvent) => {
+      // Always prevent page scroll and browser pinch-zoom inside the viewport.
+      event.preventDefault()
+
+      // Only adjust the avatar zoom when Ctrl is held; plain scroll is swallowed
+      // to avoid accidental page scroll, but does not change the image zoom.
+      if (!event.ctrlKey) return
+
+      const zoomDelta = event.deltaY > 0 ? -0.04 : 0.04
+      setAvatarEditorDraft((previous) => {
+        if (!previous) return previous
+        return { ...previous, zoom: clamp(previous.zoom + zoomDelta, avatarZoomMin, avatarZoomMax) }
+      })
+    }
+
+    viewport.addEventListener('wheel', handleWheel, { passive: false })
+    return () => viewport.removeEventListener('wheel', handleWheel)
+  }, [isAvatarEditorOpen])
+
   const openAvatarEditorWithDraft = async (draft: AvatarDraft) => {
     if (!draft.sourceUrl) {
       return
@@ -574,20 +598,6 @@ export default function UserManagementPage() {
         zoom: clamp(previous.zoom + delta, avatarZoomMin, avatarZoomMax),
       }
     })
-  }
-
-  const onAvatarEditorWheel: React.WheelEventHandler<HTMLDivElement> = (event) => {
-    if (!avatarEditorDraft || !avatarEditorMetrics) return
-
-    // Always prevent default scrolling on the viewport to avoid page zoom
-    event.preventDefault()
-
-    if (!event.ctrlKey) {
-      return
-    }
-
-    const zoomDelta = event.deltaY > 0 ? -0.04 : 0.04
-    nudgeAvatarZoom(zoomDelta)
   }
 
   const onAvatarEditorPointerDown: React.PointerEventHandler<HTMLDivElement> = (event) => {
@@ -2131,7 +2141,6 @@ export default function UserManagementPage() {
                       ref={avatarEditorViewportRef}
                       tabIndex={0}
                       className="relative mx-auto h-80 w-80 cursor-grab overflow-hidden rounded-full border border-border bg-muted/40 outline-none active:cursor-grabbing"
-                      onWheel={onAvatarEditorWheel}
                       onPointerDown={onAvatarEditorPointerDown}
                       onPointerMove={onAvatarEditorPointerMove}
                       onPointerUp={onAvatarEditorPointerUp}
