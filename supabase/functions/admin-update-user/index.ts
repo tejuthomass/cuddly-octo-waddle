@@ -36,8 +36,9 @@ Deno.serve(async (request) => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY')
 
-  if (!supabaseUrl || !serviceRoleKey) {
+  if (!supabaseUrl || !serviceRoleKey || !anonKey) {
     return jsonResponse(500, { error: 'Supabase environment is not configured.' })
   }
 
@@ -48,16 +49,20 @@ Deno.serve(async (request) => {
     return jsonResponse(401, { error: 'Missing bearer token.' })
   }
 
-  const jwt = authorization.replace('Bearer ', '')
-  const { data: callerAuth, error: callerAuthError } = await adminClient.auth.getUser(jwt)
+  let jwt = authorization.replace(/^Bearer\s+/i, '').trim()
+  if (jwt.toLowerCase().startsWith('bearer ')) {
+    jwt = jwt.slice(7).trim()
+  }
 
+  const callerClient = createClient(supabaseUrl, anonKey)
+  const { data: callerAuth, error: callerAuthError } = await callerClient.auth.getUser(jwt)
   if (callerAuthError || !callerAuth.user) {
-    return jsonResponse(401, { error: 'Invalid caller token.' })
+    return jsonResponse(401, { error: callerAuthError?.message ?? 'Invalid JWT' })
   }
 
   const callerUserId = callerAuth.user.id
 
-  const { data: callerRoles, error: callerRolesError } = await adminClient
+  const { data: callerRoles, error: callerRolesError } = await callerClient
     .from('user_role_assignments')
     .select('id')
     .eq('user_id', callerUserId)

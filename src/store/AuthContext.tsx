@@ -11,6 +11,11 @@ export const AuthContext = createContext<AuthContextValue | undefined>(undefined
 
 const SESSION_MISMATCH_MESSAGE = 'You were signed out because your account was used in a newer session.'
 const SESSION_TOAST_ID = 'session-mismatch'
+const SESSION_EXPIRY_HOURS = 24
+const SESSION_INACTIVITY_CHECK_INTERVAL = 60_000 // 1 minute  
+const SESSION_LAST_SEEN_UPDATE_INTERVAL = 300_000 // 5 minutes
+const NO_ROLES_TOAST_ID = 'no-assigned-roles'
+const SESSION_EXPIRED_TOAST_ID = 'session-expired'
 
 interface AuthProviderProps {
   children: React.ReactNode
@@ -23,6 +28,12 @@ interface UserRoleSelectRow {
   clients: Array<{
     name: string
   }> | null
+}
+
+interface AdminRoleSelectRow {
+  role_code: 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'CLIENT'
+  role_title: string
+  is_active: boolean
 }
 
 function parseStoredContext(rawValue: string | null): ActiveOrganizationContext | null {
@@ -63,28 +74,106 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [activeContext, setActiveContext] = useState<ActiveOrganizationContext | null>(null)
   const [isHydrating, setIsHydrating] = useState(true)
   const latestTokenRef = useRef<string | null>(null)
+  const lastSessionHeartbeatRef = useRef(0)
+
+  const isSessionExpiredByLastSeen = useCallback((lastSeen: string | null | undefined) => {
+    if (!lastSeen) {
+      return false
+    }
+
+    const seenAt = new Date(lastSeen).getTime()
+    if (Number.isNaN(seenAt)) {
+      return false
+    }
+
+    const maxAgeMs = SESSION_EXPIRY_HOURS * 60 * 60 * 1000
+    return Date.now() - seenAt > maxAgeMs
+  }, [])
 
   const fetchRoles = useCallback(async (userId: string): Promise<RoleAssignment[]> => {
-    const { data, error } = await supabase
+    const roleCodeToAppRole = (code: string): AppRole | null => {
+      const map: Record<string, AppRole> = {
+        'L1': 'l1_technician',
+        'L2': 'l2_supervisor',
+        'L3': 'l3_manager',
+        'L4': 'l4_management',
+        'L5': 'l5_admin',
+        'CLIENT': 'client_viewer',
+      }
+      return map[code] ?? null
+    }
+
+    // Query legacy roles
+    const { data: legacyData, error: legacyError } = await supabase
       .from('user_roles')
       .select('client_id, role, is_active, clients(name)')
       .eq('user_id', userId)
       .eq('is_active', true)
 
-    if (error) {
-      throw error
+    if (legacyError) {
+      throw legacyError
     }
 
-    const rows = (data ?? []) as UserRoleSelectRow[]
-
-    const mapped = rows.map((row) => ({
+    const legacyRows = (legacyData ?? []) as UserRoleSelectRow[]
+    const legacyMapped = legacyRows.map((row) => ({
       clientId: row.client_id,
       clientName: row.clients?.[0]?.name ?? 'Unnamed client',
       role: row.role,
     }))
 
-    return sortRoles(mapped)
+    // Query admin roles (new system)
+    const { data: adminData, error: adminError } = await supabase
+      .from('user_role_assignments')
+      .select('role_code, role_title, is_active')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .limit(1)
+
+    if (adminError) {
+      throw adminError
+    }
+
+    const adminRows = (adminData ?? []) as AdminRoleSelectRow[]
+    const adminMapped = adminRows
+      .map((row) => {
+        const appRole = roleCodeToAppRole(row.role_code)
+        if (!appRole) return null
+
+        return {
+          clientId: 'admin-system',
+          clientName: 'Admin Panel',
+          role: appRole,
+        }
+      })
+      .filter((item) => item !== null)
+
+    // Combine both sources; admin roles take precedence
+    const allRoles = [...adminMapped, ...legacyMapped]
+
+    return sortRoles(allRoles)
   }, [])
+
+  const fetchRolesWithRetry = useCallback(async (userId: string, maxRetries = 2): Promise<RoleAssignment[]> => {
+    let attempt = 0
+    let lastError: unknown = null
+
+    while (attempt <= maxRetries) {
+      try {
+        return await fetchRoles(userId)
+      } catch (error) {
+        lastError = error
+        attempt += 1
+
+        if (attempt > maxRetries) {
+          break
+        }
+
+        await new Promise((resolve) => window.setTimeout(resolve, 400 * attempt))
+      }
+    }
+
+    throw lastError
+  }, [fetchRoles])
 
   const clearLocalAuthState = useCallback(() => {
     setSession(null)
@@ -96,11 +185,39 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [])
 
   const forceSignOutForSessionMismatch = useCallback(async (userId: string) => {
+    latestTokenRef.current = null
     localStorage.removeItem(getContextStorageKey(userId))
     await supabase.auth.signOut()
     clearLocalAuthState()
     toast.error(SESSION_MISMATCH_MESSAGE, { id: SESSION_TOAST_ID })
   }, [clearLocalAuthState])
+
+  const forceSignOutForExpiredSession = useCallback(async (userId: string) => {
+    latestTokenRef.current = null
+    localStorage.removeItem(getContextStorageKey(userId))
+    await supabase.auth.signOut()
+    clearLocalAuthState()
+    toast.error(`Session expired after ${SESSION_EXPIRY_HOURS}h of inactivity. Please sign in again.`, { id: SESSION_EXPIRED_TOAST_ID })
+  }, [clearLocalAuthState])
+
+  const heartbeatActiveSession = useCallback(async (nextUser: User, nextToken: string) => {
+    const now = Date.now()
+    if (now - lastSessionHeartbeatRef.current < SESSION_LAST_SEEN_UPDATE_INTERVAL) {
+      return
+    }
+
+    const { error } = await supabase
+      .from('active_sessions')
+      .update({
+        last_seen: new Date().toISOString(),
+      })
+      .eq('user_id', nextUser.id)
+      .eq('session_token', nextToken)
+
+    if (!error) {
+      lastSessionHeartbeatRef.current = now
+    }
+  }, [])
 
   const persistContext = useCallback((userId: string, nextContext: ActiveOrganizationContext | null) => {
     const storageKey = getContextStorageKey(userId)
@@ -229,9 +346,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     const { data, error } = await supabase
       .from('active_sessions')
-      .select('session_token')
+      .select('session_token,last_seen')
       .eq('user_id', nextUser.id)
-      .maybeSingle<{ session_token: string }>()
+      .maybeSingle<{ session_token: string; last_seen: string | null }>()
 
     if (error) {
       throw error
@@ -241,13 +358,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
       return true
     }
 
+    if (isSessionExpiredByLastSeen(data.last_seen)) {
+      await forceSignOutForExpiredSession(nextUser.id)
+      return false
+    }
+
     if (data.session_token === nextToken) {
       return true
     }
 
     await forceSignOutForSessionMismatch(nextUser.id)
     return false
-  }, [forceSignOutForSessionMismatch])
+  }, [forceSignOutForExpiredSession, forceSignOutForSessionMismatch, isSessionExpiredByLastSeen])
 
   const hydrateUserState = useCallback(
     async (
@@ -271,10 +393,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
         }
       }
 
-      const roleAssignments = await fetchRoles(nextUser.id)
+      const roleAssignments = await fetchRolesWithRetry(nextUser.id)
       if (roleAssignments.length === 0) {
+        // User has no roles - sign them out with a clear message
+        latestTokenRef.current = null
         await supabase.auth.signOut()
         clearLocalAuthState()
+        toast.error('Your account has no assigned roles. Contact an administrator.', { id: NO_ROLES_TOAST_ID })
         return
       }
 
@@ -286,16 +411,25 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setActiveContext(initialContext)
       persistContext(nextUser.id, initialContext)
     },
-    [clearLocalAuthState, claimActiveSession, fetchRoles, persistContext, resolveInitialContext, validateCurrentSession],
+    [clearLocalAuthState, claimActiveSession, fetchRolesWithRetry, persistContext, resolveInitialContext, validateCurrentSession],
   )
 
-  const refreshRoles = useCallback(async () => {
+  const refreshRoles = useCallback(async (silent = false) => {
     if (!user) {
       return
     }
 
     try {
-      const roleAssignments = await fetchRoles(user.id)
+      const roleAssignments = await fetchRolesWithRetry(user.id)
+
+      if (roleAssignments.length === 0) {
+        latestTokenRef.current = null
+        await supabase.auth.signOut()
+        clearLocalAuthState()
+        toast.error('Your account has no assigned roles. Contact an administrator.', { id: NO_ROLES_TOAST_ID })
+        return
+      }
+
       setRoles(roleAssignments)
 
       if (!activeContext) {
@@ -322,9 +456,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
         persistContext(user.id, nextContext)
       }
     } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to refresh role assignments.'))
+      if (!silent) {
+        toast.error(toHumanErrorMessage(error, 'Unable to refresh role assignments.'))
+      }
     }
-  }, [activeContext, fetchRoles, persistContext, user])
+  }, [activeContext, clearLocalAuthState, fetchRolesWithRetry, persistContext, user])
 
   const login = useCallback(async (identifier: string, password: string) => {
     const normalizedIdentifier = identifier.trim()
@@ -359,6 +495,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       localStorage.removeItem(getContextStorageKey(user.id))
     }
 
+    latestTokenRef.current = null
     await supabase.auth.signOut()
     clearLocalAuthState()
   }, [clearLocalAuthState, user])
@@ -475,23 +612,48 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
 
       try {
-        await validateCurrentSession(user, session)
+        const valid = await validateCurrentSession(user, session)
+        if (!valid) {
+          return
+        }
       } catch (error) {
         toast.error(toHumanErrorMessage(error, 'Failed to validate active session.'))
       }
     }
 
+    const onActivity = () => {
+      void heartbeatActiveSession(user, session.access_token)
+    }
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void runValidation()
+        void refreshRoles(true)
+      }
+    }
+
+    window.addEventListener('focus', onVisible)
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('pointerdown', onActivity)
+    window.addEventListener('keydown', onActivity)
+    window.addEventListener('touchstart', onActivity)
+
     const intervalId = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
         void runValidation()
       }
-    }, 300_000)
+    }, SESSION_INACTIVITY_CHECK_INTERVAL)
 
     return () => {
       active = false
+      window.removeEventListener('focus', onVisible)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('pointerdown', onActivity)
+      window.removeEventListener('keydown', onActivity)
+      window.removeEventListener('touchstart', onActivity)
       window.clearInterval(intervalId)
     }
-  }, [session, user, validateCurrentSession])
+  }, [heartbeatActiveSession, refreshRoles, session, user, validateCurrentSession])
 
   useEffect(() => {
     if (!session || !user) {

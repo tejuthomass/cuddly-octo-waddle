@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { AlertTriangle, ArrowDown, ArrowDownUp, ArrowUp, CircleHelp, Eye, Filter, Pencil, Power, PowerOff, RefreshCw, Search, UserPlus, X } from 'lucide-react'
+import { AlertTriangle, ArrowDown, ArrowDownUp, ArrowUp, CircleHelp, Eye, Filter, Minus, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Search, Trash2, Upload, UserPlus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -18,6 +18,7 @@ import { useCompanyOptions, useFacilityOptions } from '@/hooks/useAdminAccess'
 import { useAuth } from '@/hooks/useAuth'
 import {
   type AdminUserRow,
+  useAdminUpdateUserAvatar,
   useAdminUsers,
   useCreateAdminUser,
   useHardDeleteUser,
@@ -77,6 +78,25 @@ const detailSchema = z.object({
 type CreateFormValues = z.infer<typeof createSchema>
 type DetailFormValues = z.infer<typeof detailSchema>
 
+type AvatarDraft = {
+  sourceUrl: string | null
+  uploadedObjectUrl: string | null
+  hasNewUpload: boolean
+  markedForRemoval: boolean
+  zoom: number
+  panX: number
+  panY: number
+}
+
+type AvatarImageSize = {
+  width: number
+  height: number
+}
+
+const avatarEditorViewportSize = 320
+const avatarZoomMin = 1
+const avatarZoomMax = 3
+
 const roleTitleByCode: Record<RoleCode, string> = {
   L1: 'Technician',
   L2: 'Supervisor',
@@ -118,6 +138,127 @@ function splitPhone(phone: string | null): { countryCode: string; phoneLocal: st
     countryCode: matchedOption?.value ?? matched,
     phoneLocal: normalized.slice(matched.length).replace(/[^\d]/g, ''),
   }
+}
+
+const defaultAvatarDraft: AvatarDraft = {
+  sourceUrl: null,
+  uploadedObjectUrl: null,
+  hasNewUpload: false,
+  markedForRemoval: false,
+  zoom: 1,
+  panX: 0,
+  panY: 0,
+}
+
+function buildAvatarDraftFromUrl(url: string | null): AvatarDraft {
+  return {
+    ...defaultAvatarDraft,
+    sourceUrl: url,
+  }
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function getAvatarRenderMetrics(draft: AvatarDraft, imageSize: AvatarImageSize, viewportSize: number) {
+  // Calculate base scale to fit image in viewport while maintaining aspect ratio
+  const baseScale = Math.min(viewportSize / imageSize.width, viewportSize / imageSize.height)
+  const zoom = clamp(draft.zoom, avatarZoomMin, avatarZoomMax)
+  const scale = baseScale * zoom
+  
+  // Calculate actual rendered dimensions
+  const drawWidth = imageSize.width * scale
+  const drawHeight = imageSize.height * scale
+  
+  // Calculate how much room there is to pan
+  const panRoomX = Math.max(0, drawWidth - viewportSize)
+  const panRoomY = Math.max(0, drawHeight - viewportSize)
+  
+  // Clamp pan values
+  const panXClamped = clamp(draft.panX, -100, 100)
+  const panYClamped = clamp(draft.panY, -100, 100)
+  
+  // Calculate position
+  // When panRoom = 0, center the image
+  // When panRoom > 0, pan from -panRoom/2 to +panRoom/2 based on normalized pan values
+  let left: number
+  let top: number
+  
+  if (panRoomX === 0) {
+    left = (viewportSize - drawWidth) / 2
+  } else {
+    // panX: -100 (left edge) to +100 (right edge)
+    // Convert to: 0 (left edge) to panRoomX (right edge), centered at panRoomX/2
+    const normalizedPan = (panXClamped + 100) / 200 // 0 to 1
+    left = -normalizedPan * panRoomX
+  }
+  
+  if (panRoomY === 0) {
+    top = (viewportSize - drawHeight) / 2
+  } else {
+    const normalizedPan = (panYClamped + 100) / 200 // 0 to 1
+    top = -normalizedPan * panRoomY
+  }
+
+  return {
+    drawWidth,
+    drawHeight,
+    panRoomX,
+    panRoomY,
+    left,
+    top,
+  }
+}
+
+function normalizeAvatarDraft(draft: AvatarDraft): AvatarDraft {
+  return {
+    ...draft,
+    zoom: clamp(draft.zoom, avatarZoomMin, avatarZoomMax),
+    panX: clamp(draft.panX, -100, 100),
+    panY: clamp(draft.panY, -100, 100),
+  }
+}
+
+async function loadImage(url: string): Promise<HTMLImageElement> {
+  return await new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('Unable to read image.'))
+    image.src = url
+  })
+}
+
+async function buildAvatarBlobFromDraft(draft: AvatarDraft): Promise<Blob> {
+  if (!draft.sourceUrl) {
+    throw new Error('No avatar selected.')
+  }
+
+  const image = await loadImage(draft.sourceUrl)
+  const targetSize = 512
+
+  const canvas = document.createElement('canvas')
+  canvas.width = targetSize
+  canvas.height = targetSize
+  const context = canvas.getContext('2d')
+
+  if (!context) {
+    throw new Error('Unable to process image.')
+  }
+
+  const { drawWidth, drawHeight, left, top } = getAvatarRenderMetrics(normalizeAvatarDraft(draft), { width: image.width, height: image.height }, targetSize)
+
+  context.drawImage(image, left, top, drawWidth, drawHeight)
+
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob((nextBlob) => resolve(nextBlob), 'image/webp', 0.82)
+  })
+
+  if (!blob) {
+    throw new Error('Unable to compress image.')
+  }
+
+  return blob
 }
 
 function RequiredMark() {
@@ -216,6 +357,7 @@ export default function UserManagementPage() {
   const toggleUserMutation = useToggleUserActive()
   const hardDeleteUserMutation = useHardDeleteUser()
   const resetPasswordMutation = useResetAdminUserPassword()
+  const updateUserAvatarMutation = useAdminUpdateUserAvatar()
 
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState<'ALL' | RoleCode>('ALL')
@@ -242,8 +384,28 @@ export default function UserManagementPage() {
   const [pendingBulkAction, setPendingBulkAction] = useState<'activate' | 'deactivate' | null>(null)
   const [pendingUserStatusAction, setPendingUserStatusAction] = useState<{ user: AdminUserRow; nextIsActive: boolean } | null>(null)
   const [lastSelectedRowIndex, setLastSelectedRowIndex] = useState<number | null>(null)
+  const [avatarDraft, setAvatarDraft] = useState<AvatarDraft>(defaultAvatarDraft)
+  const [avatarEditorDraft, setAvatarEditorDraft] = useState<AvatarDraft | null>(null)
+  const [isAvatarEditorOpen, setIsAvatarEditorOpen] = useState(false)
+  const [avatarEditorImageSize, setAvatarEditorImageSize] = useState<AvatarImageSize | null>(null)
+  const [isAvatarEditorConfirmOpen, setIsAvatarEditorConfirmOpen] = useState(false)
   const lastSelfSelectToastAtRef = useRef(0)
+  const detailAvatarInputRef = useRef<HTMLInputElement | null>(null)
   const detailsPaneRef = useRef<HTMLElement | null>(null)
+  const avatarEditorViewportRef = useRef<HTMLDivElement | null>(null)
+  const avatarEditorDragRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null)
+  const avatarEditorTouchRef = useRef<{ touch1: Touch; touch2?: Touch; startZoom: number; startPanX: number; startPanY: number } | null>(null)
+
+  const getDistance = (touch1: Touch, touch2: Touch): number => {
+    const dx = touch2.clientX - touch1.clientX
+    const dy = touch2.clientY - touch1.clientY
+    return Math.sqrt(dx * dx + dy * dy)
+  }
+
+  const getMidpoint = (touch1: Touch, touch2: Touch): { x: number; y: number } => ({
+    x: (touch1.clientX + touch2.clientX) / 2,
+    y: (touch1.clientY + touch2.clientY) / 2,
+  })
 
   const {
     register: registerCreate,
@@ -301,6 +463,242 @@ export default function UserManagementPage() {
   const detailCanAssignSites = isScopedOpsRole(detailRoleCode)
 
   const isSelfSelected = Boolean(selectedUser && currentUser?.id === selectedUser.id)
+  const avatarDirty = Boolean(
+    selectedUser
+    && (
+      avatarDraft.hasNewUpload
+      || (avatarDraft.markedForRemoval && Boolean(selectedUser.avatar_url))
+    ),
+  )
+  const hasUnsavedDetailChanges = detailIsDirty || avatarDirty
+
+  const avatarEditorMetrics = useMemo(() => {
+    if (!avatarEditorDraft || !avatarEditorImageSize) {
+      return null
+    }
+
+    return getAvatarRenderMetrics(avatarEditorDraft, avatarEditorImageSize, avatarEditorViewportSize)
+  }, [avatarEditorDraft, avatarEditorImageSize])
+
+  useEffect(() => {
+    if (!isAvatarEditorOpen) return
+    avatarEditorViewportRef.current?.focus()
+  }, [isAvatarEditorOpen])
+
+  const openAvatarEditorWithDraft = async (draft: AvatarDraft) => {
+    if (!draft.sourceUrl) {
+      return
+    }
+
+    try {
+      const image = await loadImage(draft.sourceUrl)
+      const normalizedDraft = normalizeAvatarDraft(draft)
+      setAvatarEditorDraft((previous) => {
+        if (previous?.uploadedObjectUrl && previous.uploadedObjectUrl !== avatarDraft.uploadedObjectUrl && previous.uploadedObjectUrl !== normalizedDraft.uploadedObjectUrl) {
+          URL.revokeObjectURL(previous.uploadedObjectUrl)
+        }
+        return normalizedDraft
+      })
+      setAvatarEditorImageSize({ width: image.naturalWidth || image.width, height: image.naturalHeight || image.height })
+      setIsAvatarEditorOpen(true)
+    } catch {
+      toast.error('Unable to open image editor.')
+    }
+  }
+
+  const closeAvatarEditor = () => {
+    // Check if there are unsaved changes
+    if (
+      avatarEditorDraft
+      && (
+        avatarEditorDraft.panX !== avatarDraft.panX
+        || avatarEditorDraft.panY !== avatarDraft.panY
+        || avatarEditorDraft.zoom !== avatarDraft.zoom
+      )
+    ) {
+      // Show confirmation dialog
+      setIsAvatarEditorConfirmOpen(true)
+      return
+    }
+
+    setIsAvatarEditorOpen(false)
+    setAvatarEditorImageSize(null)
+    setAvatarEditorDraft((previous) => {
+      if (previous?.uploadedObjectUrl && previous.uploadedObjectUrl !== avatarDraft.uploadedObjectUrl) {
+        URL.revokeObjectURL(previous.uploadedObjectUrl)
+      }
+      return null
+    })
+  }
+
+  const applyAvatarEditor = () => {
+    if (!avatarEditorDraft) {
+      closeAvatarEditor()
+      return
+    }
+
+    setAvatarDraft((previous) => {
+      if (previous.uploadedObjectUrl && previous.uploadedObjectUrl !== avatarEditorDraft.uploadedObjectUrl) {
+        URL.revokeObjectURL(previous.uploadedObjectUrl)
+      }
+
+      return normalizeAvatarDraft(avatarEditorDraft)
+    })
+
+    setIsAvatarEditorOpen(false)
+    setAvatarEditorImageSize(null)
+    setAvatarEditorDraft(null)
+  }
+
+  const nudgeAvatarPan = (axis: 'x' | 'y', delta: number) => {
+    setAvatarEditorDraft((previous) => {
+      if (!previous) return previous
+      
+      // Calculate new pan value
+      const newPanX = axis === 'x' ? clamp(previous.panX + delta, -100, 100) : previous.panX
+      const newPanY = axis === 'y' ? clamp(previous.panY + delta, -100, 100) : previous.panY
+      
+      return {
+        ...previous,
+        panX: newPanX,
+        panY: newPanY,
+      }
+    })
+  }
+
+  const nudgeAvatarZoom = (delta: number) => {
+    setAvatarEditorDraft((previous) => {
+      if (!previous) return previous
+      return {
+        ...previous,
+        zoom: clamp(previous.zoom + delta, avatarZoomMin, avatarZoomMax),
+      }
+    })
+  }
+
+  const onAvatarEditorWheel: React.WheelEventHandler<HTMLDivElement> = (event) => {
+    if (!avatarEditorDraft || !avatarEditorMetrics) return
+
+    // Always prevent default scrolling on the viewport to avoid page zoom
+    event.preventDefault()
+
+    if (!event.ctrlKey) {
+      return
+    }
+
+    const zoomDelta = event.deltaY > 0 ? -0.04 : 0.04
+    nudgeAvatarZoom(zoomDelta)
+  }
+
+  const onAvatarEditorPointerDown: React.PointerEventHandler<HTMLDivElement> = (event) => {
+    if (!avatarEditorDraft) return
+    avatarEditorDragRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      panX: avatarEditorDraft.panX,
+      panY: avatarEditorDraft.panY,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const onAvatarEditorPointerMove: React.PointerEventHandler<HTMLDivElement> = (event) => {
+    if (!avatarEditorDraft || !avatarEditorMetrics || !avatarEditorDragRef.current) return
+
+    const drag = avatarEditorDragRef.current
+    const deltaX = event.clientX - drag.startX
+    const deltaY = event.clientY - drag.startY
+    
+    // Convert pixel movement to pan changes
+    // Dragging right should show more of the image's left side (pan increases)
+    // If panRoomX pixels of drag = 200 units of pan, then:
+    const panXDelta = avatarEditorMetrics.panRoomX > 0 ? (deltaX / avatarEditorMetrics.panRoomX) * 200 : 0
+    const panYDelta = avatarEditorMetrics.panRoomY > 0 ? (deltaY / avatarEditorMetrics.panRoomY) * 200 : 0
+
+    setAvatarEditorDraft((previous) => {
+      if (!previous) return previous
+
+      return {
+        ...previous,
+        panX: clamp(drag.panX + panXDelta, -100, 100),
+        panY: clamp(drag.panY + panYDelta, -100, 100),
+      }
+    })
+  }
+
+  const onAvatarEditorPointerUp: React.PointerEventHandler<HTMLDivElement> = (event) => {
+    avatarEditorDragRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  const onAvatarEditorKeyDown: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
+    if (!avatarEditorDraft) return
+
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      nudgeAvatarPan('x', -4)
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      nudgeAvatarPan('x', 4)
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      nudgeAvatarPan('y', -4)
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      nudgeAvatarPan('y', 4)
+    } else if (event.key === '+' || event.key === '=') {
+      event.preventDefault()
+      nudgeAvatarZoom(0.06)
+    } else if (event.key === '-' || event.key === '_') {
+      event.preventDefault()
+      nudgeAvatarZoom(-0.06)
+    }
+  }
+
+  const onAvatarEditorTouchStart: React.TouchEventHandler<HTMLDivElement> = (event) => {
+    if (!avatarEditorDraft || event.touches.length < 2) return
+
+    const touch1 = event.touches[0]
+    const touch2 = event.touches[1]
+
+    avatarEditorTouchRef.current = {
+      touch1,
+      touch2,
+      startZoom: avatarEditorDraft.zoom,
+      startPanX: avatarEditorDraft.panX,
+      startPanY: avatarEditorDraft.panY,
+    }
+
+    event.preventDefault()
+  }
+
+  const onAvatarEditorTouchMove: React.TouchEventHandler<HTMLDivElement> = (event) => {
+    if (!avatarEditorDraft || !avatarEditorMetrics || !avatarEditorTouchRef.current || event.touches.length < 2) return
+
+    const touchState = avatarEditorTouchRef.current
+    const touch1 = event.touches[0]
+    const touch2 = event.touches[1]
+    const currentDistance = getDistance(touch1, touch2)
+    const startDistance = getDistance(touchState.touch1, touchState.touch2 || touchState.touch1)
+
+    if (startDistance > 0) {
+      const zoomFactor = currentDistance / startDistance
+      const nextZoom = clamp(touchState.startZoom * zoomFactor, avatarZoomMin, avatarZoomMax)
+      setAvatarEditorDraft((previous) => {
+        if (!previous) return previous
+        return { ...previous, zoom: nextZoom }
+      })
+    }
+
+    event.preventDefault()
+  }
+
+  const onAvatarEditorTouchEnd: React.TouchEventHandler<HTMLDivElement> = (event) => {
+    if (event.touches.length < 2) {
+      avatarEditorTouchRef.current = null
+    }
+  }
 
   const renderCountryOption = (optionLabel: string) => {
     const parsed = parseCountryOptionLabel(optionLabel)
@@ -618,7 +1016,7 @@ export default function UserManagementPage() {
     }
 
     try {
-      await Promise.all(targets.map((row) => toggleUserMutation.mutateAsync({ userId: row.id, isActive })))
+      await Promise.all(targets.map((row) => toggleUserMutation.mutateAsync({ userId: row.id, isActive, expectedUpdatedAt: row.updated_at })))
       toast.success(isActive ? 'Selected users activated.' : 'Selected users deactivated.')
       setSelectedUserIds([])
     } catch (error) {
@@ -752,32 +1150,73 @@ export default function UserManagementPage() {
 
     resetDetail(nextValues)
     setDetailSnapshot(nextValues)
+    setAvatarDraft(buildAvatarDraftFromUrl(row.avatar_url))
     setIsEditingDetails(false)
   }
 
   const onSaveUserDetails = async (values: DetailFormValues) => {
     if (!selectedUser) return
+
     try {
-      const phone = normalizePhone(values.countryCode, values.phoneLocal)
-      await updateUserMutation.mutateAsync({
-        userId: selectedUser.id,
-        email: values.email,
-        fullName: values.fullName,
-        phone,
-        roleCode: values.roleCode,
-        roleTitle: values.roleTitle,
-        companyIds: values.roleCode === 'CLIENT' ? (values.companyIds ?? []) : [],
-        facilityIds: isScopedOpsRole(values.roleCode) ? (values.facilityIds ?? []) : [],
-      })
-      toast.success('User updated.')
-      const nextSnapshot: DetailFormValues = {
-        ...values,
-        companyIds: values.companyIds ?? [],
-        facilityIds: values.facilityIds ?? [],
+      if (!hasUnsavedDetailChanges) {
+        setIsEditingDetails(false)
+        return
       }
-      setDetailSnapshot(nextSnapshot)
-      resetDetail(nextSnapshot)
+
+      let nextUpdatedAt = selectedUser.updated_at
+      let nextAvatarUrl = selectedUser.avatar_url
+
+      if (detailIsDirty) {
+        const phone = normalizePhone(values.countryCode, values.phoneLocal)
+        const detailResult = await updateUserMutation.mutateAsync({
+          userId: selectedUser.id,
+          email: values.email,
+          fullName: values.fullName,
+          phone,
+          expectedUpdatedAt: nextUpdatedAt,
+          roleCode: values.roleCode,
+          roleTitle: values.roleTitle,
+          companyIds: values.roleCode === 'CLIENT' ? (values.companyIds ?? []) : [],
+          facilityIds: isScopedOpsRole(values.roleCode) ? (values.facilityIds ?? []) : [],
+        })
+
+        nextUpdatedAt = detailResult.updated_at
+
+        const nextSnapshot: DetailFormValues = {
+          ...values,
+          companyIds: values.companyIds ?? [],
+          facilityIds: values.facilityIds ?? [],
+        }
+
+        setDetailSnapshot(nextSnapshot)
+        resetDetail(nextSnapshot)
+      }
+
+      if (avatarDirty) {
+        const avatarBlob = avatarDraft.markedForRemoval
+          ? null
+          : await buildAvatarBlobFromDraft(avatarDraft)
+
+        const avatarResult = await updateUserAvatarMutation.mutateAsync({
+          userId: selectedUser.id,
+          avatarBlob,
+          expectedUpdatedAt: nextUpdatedAt,
+        })
+
+        nextUpdatedAt = avatarResult.updated_at
+        nextAvatarUrl = avatarResult.avatar_url
+      }
+
+      setSelectedUser((prev) => (prev && prev.id === selectedUser.id
+        ? {
+          ...prev,
+          avatar_url: nextAvatarUrl,
+          updated_at: nextUpdatedAt,
+        }
+        : prev))
+      setAvatarDraft(buildAvatarDraftFromUrl(nextAvatarUrl))
       setIsEditingDetails(false)
+      toast.success('User updated.')
     } catch (error) {
       toast.error(toHumanErrorMessage(error, 'Unable to update user.'))
     }
@@ -787,12 +1226,24 @@ export default function UserManagementPage() {
     if (pendingDiscardAction === 'close') {
       setSelectedUser(null)
       setIsEditingDetails(false)
+      setIsAvatarEditorOpen(false)
+      setAvatarEditorDraft(null)
+      setAvatarEditorImageSize(null)
+      setAvatarDraft(defaultAvatarDraft)
     }
 
     if (pendingDiscardAction === 'cancel-edit') {
       if (detailSnapshot) {
         resetDetail(detailSnapshot)
       }
+      if (selectedUser) {
+        setAvatarDraft(buildAvatarDraftFromUrl(selectedUser.avatar_url))
+      } else {
+        setAvatarDraft(defaultAvatarDraft)
+      }
+      setIsAvatarEditorOpen(false)
+      setAvatarEditorDraft(null)
+      setAvatarEditorImageSize(null)
       setIsEditingDetails(false)
     }
 
@@ -806,13 +1257,17 @@ export default function UserManagementPage() {
   }
 
   const onAttemptCloseDetails = () => {
-    if (isEditingDetails && detailIsDirty) {
+    if (isEditingDetails && hasUnsavedDetailChanges) {
       requestDiscardConfirmation('close')
       return
     }
 
     setSelectedUser(null)
     setIsEditingDetails(false)
+    setIsAvatarEditorOpen(false)
+    setAvatarEditorDraft(null)
+    setAvatarEditorImageSize(null)
+    setAvatarDraft(defaultAvatarDraft)
   }
 
   const onOpenUserStatusConfirm = (row: AdminUserRow, nextIsActive: boolean) => {
@@ -832,7 +1287,7 @@ export default function UserManagementPage() {
     const { user, nextIsActive } = pendingUserStatusAction
 
     try {
-      await toggleUserMutation.mutateAsync({ userId: user.id, isActive: nextIsActive })
+      await toggleUserMutation.mutateAsync({ userId: user.id, isActive: nextIsActive, expectedUpdatedAt: user.updated_at })
       setSelectedUser((prev) => (prev && prev.id === user.id ? { ...prev, is_active: nextIsActive } : prev))
       await refetch()
       toast.success(nextIsActive ? 'User activated.' : 'User deactivated.')
@@ -849,6 +1304,62 @@ export default function UserManagementPage() {
     } catch (error) {
       toast.error(toHumanErrorMessage(error, 'Unable to reset password for this user.'))
     }
+  }
+
+  const onSelectDetailAvatar = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!selectedUser) return
+
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    if (!file.type.startsWith('image/')) {
+      toast.error('Select a valid image file.')
+      return
+    }
+
+    if (file.size > 15 * 1024 * 1024) {
+      toast.error('Image is too large. Use a file under 15MB.')
+      event.currentTarget.value = ''
+      return
+    }
+
+    const objectUrl = URL.createObjectURL(file)
+    const nextDraft: AvatarDraft = {
+      sourceUrl: objectUrl,
+      uploadedObjectUrl: objectUrl,
+      hasNewUpload: true,
+      markedForRemoval: false,
+      zoom: 1,
+      panX: 0,
+      panY: 0,
+    }
+
+    void openAvatarEditorWithDraft(nextDraft)
+    event.currentTarget.value = ''
+  }
+
+  const onOpenAvatarEditor = () => {
+    if (!avatarDraft.sourceUrl || avatarDraft.markedForRemoval) {
+      return
+    }
+
+    void openAvatarEditorWithDraft({ ...avatarDraft })
+  }
+
+  const onRemoveDetailAvatar = () => {
+    setAvatarDraft((previous) => {
+      if (previous.uploadedObjectUrl) {
+        URL.revokeObjectURL(previous.uploadedObjectUrl)
+      }
+
+      return {
+        ...previous,
+        uploadedObjectUrl: null,
+        markedForRemoval: true,
+        hasNewUpload: false,
+        sourceUrl: null,
+      }
+    })
   }
 
   const onToggleUserInline = (row: AdminUserRow) => {
@@ -890,8 +1401,42 @@ export default function UserManagementPage() {
   useEffect(() => {
     if (!selectedUser) return
     const refreshed = users.find((row) => row.id === selectedUser.id)
-    if (refreshed) setSelectedUser(refreshed)
-  }, [selectedUser, users])
+    if (!refreshed) return
+
+    setSelectedUser(refreshed)
+
+    // Keep read-only details view fresh when another admin edits this user.
+    if (!isEditingDetails) {
+      const split = splitPhone(refreshed.phone)
+      const nextValues: DetailFormValues = {
+        fullName: refreshed.full_name,
+        email: refreshed.email,
+        countryCode: split.countryCode,
+        phoneLocal: split.phoneLocal,
+        roleCode: refreshed.role_code ?? 'L1',
+        roleTitle: refreshed.role_title ?? roleTitleByCode[refreshed.role_code ?? 'L1'],
+        companyIds: refreshed.company_ids ?? (refreshed.company_id ? [refreshed.company_id] : []),
+        facilityIds: refreshed.facility_ids ?? (refreshed.facility_id ? [refreshed.facility_id] : []),
+      }
+
+      setDetailSnapshot(nextValues)
+      resetDetail(nextValues)
+      setAvatarDraft((previous) => {
+        if (previous.uploadedObjectUrl) {
+          URL.revokeObjectURL(previous.uploadedObjectUrl)
+        }
+        return buildAvatarDraftFromUrl(refreshed.avatar_url)
+      })
+    }
+  }, [isEditingDetails, resetDetail, selectedUser, users])
+
+  useEffect(() => {
+    return () => {
+      if (avatarDraft.uploadedObjectUrl) {
+        URL.revokeObjectURL(avatarDraft.uploadedObjectUrl)
+      }
+    }
+  }, [avatarDraft.uploadedObjectUrl])
 
   useEffect(() => {
     setUserPage(1)
@@ -1468,7 +2013,7 @@ export default function UserManagementPage() {
                     className="h-9 px-3"
                     type="button"
                     onClick={() => {
-                      if (detailIsDirty) {
+                      if (hasUnsavedDetailChanges) {
                         requestDiscardConfirmation('cancel-edit')
                         return
                       }
@@ -1493,6 +2038,7 @@ export default function UserManagementPage() {
             <div className="mb-6 grid gap-3 rounded-md border border-border/70 bg-muted/30 p-4 text-sm">
               <div><span className="text-muted-foreground">User ID:</span> <span className="font-medium">{selectedUser.user_id}</span></div>
               <div><span className="text-muted-foreground">Created At:</span> {new Date(selectedUser.created_at).toLocaleString()}</div>
+              <div><span className="text-muted-foreground">Last Updated:</span> {new Date(selectedUser.updated_at).toLocaleString()}</div>
               <div><span className="text-muted-foreground">Status:</span> {selectedUser.is_active ? 'Active' : 'Inactive'}</div>
               <div>
                 <span className="text-muted-foreground">Accounts:</span>{' '}
@@ -1506,23 +2052,208 @@ export default function UserManagementPage() {
             <div className="mb-6 rounded-md border border-border/70 p-4">
               <p className="mb-3 text-sm font-medium">Profile Photo</p>
               <div className="flex flex-wrap items-center gap-4">
-                {selectedUser.avatar_url ? (
-                  <img src={selectedUser.avatar_url} alt={selectedUser.full_name || selectedUser.user_id} className="h-14 w-14 rounded-full border border-border object-cover" />
+                {avatarDraft.sourceUrl && !avatarDraft.markedForRemoval ? (
+                  <img src={avatarDraft.sourceUrl} alt={selectedUser.full_name || selectedUser.user_id} className="h-14 w-14 rounded-full border border-border object-cover" />
                 ) : (
                   <div className="flex h-14 w-14 items-center justify-center rounded-full border border-border bg-muted text-base font-semibold">
                     {(selectedUser.full_name || selectedUser.user_id).slice(0, 1).toUpperCase()}
                   </div>
                 )}
 
-                {isSelfSelected ? (
-                  <Button type="button" variant="outline" className="h-9 px-3" onClick={() => navigate('/settings')}>
-                    Manage
-                  </Button>
-                ) : (
-                  <p className="text-xs text-muted-foreground">Only this user can change their photo in their own profile settings.</p>
-                )}
+                {isEditingDetails ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={detailAvatarInputRef}
+                      id="detail-avatar-input"
+                      type="file"
+                      accept="image/*"
+                      onChange={(event) => {
+                        void onSelectDetailAvatar(event)
+                      }}
+                      className="hidden"
+                    />
+                    <TooltipIconButton
+                      type="button"
+                      onClick={() => detailAvatarInputRef.current?.click()}
+                      disabled={updateUserMutation.isPending || updateUserAvatarMutation.isPending}
+                      tooltip="Upload photo"
+                      aria-label="Upload photo"
+                    >
+                      <Upload className="h-4 w-4" />
+                    </TooltipIconButton>
+                    <TooltipIconButton
+                      type="button"
+                      onClick={onOpenAvatarEditor}
+                      disabled={(!avatarDraft.sourceUrl || avatarDraft.markedForRemoval) || updateUserMutation.isPending || updateUserAvatarMutation.isPending}
+                      tooltip="Adjust photo"
+                      aria-label="Adjust photo"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </TooltipIconButton>
+                    <TooltipIconButton
+                      type="button"
+                      onClick={() => void onRemoveDetailAvatar()}
+                      disabled={(!avatarDraft.sourceUrl && !selectedUser.avatar_url) || updateUserMutation.isPending || updateUserAvatarMutation.isPending}
+                      tooltip="Remove photo"
+                      aria-label="Remove photo"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </TooltipIconButton>
+                    <TooltipIconButton
+                      type="button"
+                      onClick={() => {
+                        setAvatarDraft((previous) => {
+                          if (previous.uploadedObjectUrl) {
+                            URL.revokeObjectURL(previous.uploadedObjectUrl)
+                          }
+                          return buildAvatarDraftFromUrl(selectedUser.avatar_url)
+                        })
+                      }}
+                      disabled={!avatarDirty || updateUserMutation.isPending || updateUserAvatarMutation.isPending}
+                      tooltip="Reset photo edits"
+                      aria-label="Reset photo edits"
+                    >
+                      <RotateCcw className="h-4 w-4" />
+                    </TooltipIconButton>
+                  </div>
+                ) : null}
               </div>
             </div>
+            {isAvatarEditorOpen && avatarEditorDraft?.sourceUrl ? (
+              <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4" onClick={() => closeAvatarEditor()}>
+                <Card className="w-full max-w-xl" onClick={(event) => event.stopPropagation()}>
+                  <CardHeader>
+                    <CardTitle className="text-base">Adjust Photo</CardTitle>
+                    <CardDescription>Drag to move. Pinch or Ctrl+scroll to zoom.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div
+                      ref={avatarEditorViewportRef}
+                      tabIndex={0}
+                      className="relative mx-auto h-80 w-80 cursor-grab overflow-hidden rounded-full border border-border bg-muted/40 outline-none active:cursor-grabbing"
+                      onWheel={onAvatarEditorWheel}
+                      onPointerDown={onAvatarEditorPointerDown}
+                      onPointerMove={onAvatarEditorPointerMove}
+                      onPointerUp={onAvatarEditorPointerUp}
+                      onPointerCancel={onAvatarEditorPointerUp}
+                      onTouchStart={onAvatarEditorTouchStart}
+                      onTouchMove={onAvatarEditorTouchMove}
+                      onTouchEnd={onAvatarEditorTouchEnd}
+                      onKeyDown={onAvatarEditorKeyDown}
+                    >
+                      {avatarEditorMetrics ? (
+                        <img
+                          src={avatarEditorDraft.sourceUrl}
+                          alt={selectedUser.full_name || selectedUser.user_id}
+                          className="pointer-events-none absolute select-none"
+                          draggable={false}
+                          style={{
+                            width: `${avatarEditorMetrics.drawWidth}px`,
+                            height: `${avatarEditorMetrics.drawHeight}px`,
+                            left: `${avatarEditorMetrics.left}px`,
+                            top: `${avatarEditorMetrics.top}px`,
+                            objectFit: 'cover',
+                            imageRendering: 'auto',
+                          }}
+                        />
+                      ) : null}
+                    </div>
+
+                    <div className="flex items-center justify-between rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                      <span>Zoom {Math.round((avatarEditorDraft.zoom ?? 1) * 100)}%</span>
+                      <span>Arrows move, +/- zoom</span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <Button type="button" variant="outline" size="icon" className="h-8 w-8" onClick={() => nudgeAvatarZoom(-0.08)} aria-label="Zoom out">
+                        <Minus className="h-4 w-4" />
+                      </Button>
+                      <Button type="button" variant="outline" size="icon" className="h-8 w-8" onClick={() => nudgeAvatarZoom(0.08)} aria-label="Zoom in">
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                      <Button type="button" variant="outline" className="h-8 px-3" onClick={() => nudgeAvatarPan('x', -6)}>
+                        Left
+                      </Button>
+                      <Button type="button" variant="outline" className="h-8 px-3" onClick={() => nudgeAvatarPan('x', 6)}>
+                        Right
+                      </Button>
+                      <Button type="button" variant="outline" className="h-8 px-3" onClick={() => nudgeAvatarPan('y', -6)}>
+                        Up
+                      </Button>
+                      <Button type="button" variant="outline" className="h-8 px-3" onClick={() => nudgeAvatarPan('y', 6)}>
+                        Down
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-8 px-3"
+                        onClick={() => {
+                          setAvatarEditorDraft((previous) => (previous
+                            ? {
+                              ...previous,
+                              zoom: 1,
+                              panX: 0,
+                              panY: 0,
+                            }
+                            : previous))
+                        }}
+                      >
+                        Reset
+                      </Button>
+                    </div>
+
+                    <div className="flex justify-end gap-2">
+                      <Button type="button" variant="outline" className="h-9 px-3" onClick={closeAvatarEditor}>
+                        Cancel
+                      </Button>
+                      <Button type="button" className="h-9 px-3" onClick={applyAvatarEditor} disabled={!avatarEditorImageSize}>
+                        Apply
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            ) : null}
+            {isAvatarEditorConfirmOpen ? (
+              <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 p-4">
+                <Card className="w-full max-w-sm">
+                  <CardHeader>
+                    <CardTitle className="text-base">Discard Changes?</CardTitle>
+                    <CardDescription>You have unsaved adjustments to the photo. Do you want to discard them?</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-9 px-3"
+                        onClick={() => setIsAvatarEditorConfirmOpen(false)}
+                      >
+                        Keep Editing
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        className="h-9 px-3"
+                        onClick={() => {
+                          setIsAvatarEditorConfirmOpen(false)
+                          setIsAvatarEditorOpen(false)
+                          setAvatarEditorImageSize(null)
+                          setAvatarEditorDraft((previous) => {
+                            if (previous?.uploadedObjectUrl && previous.uploadedObjectUrl !== avatarDraft.uploadedObjectUrl) {
+                              URL.revokeObjectURL(previous.uploadedObjectUrl)
+                            }
+                            return null
+                          })
+                        }}
+                      >
+                        Discard
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            ) : null}
             <form className="space-y-4" onSubmit={handleDetailSubmit(onSaveUserDetails)}>
               <div className="space-y-2">
                 <Label htmlFor="detail-fullName">Full Name<RequiredMark /></Label>
@@ -1683,8 +2414,12 @@ export default function UserManagementPage() {
                 </div>
               ) : null}
               <div className="flex justify-end">
-                <Button type="submit" className="h-9 px-3" disabled={!isEditingDetails || !detailIsDirty || updateUserMutation.isPending}>
-                  {updateUserMutation.isPending ? 'Saving...' : 'Save'}
+                <Button
+                  type="submit"
+                  className="h-9 px-3"
+                  disabled={!isEditingDetails || !hasUnsavedDetailChanges || updateUserMutation.isPending || updateUserAvatarMutation.isPending}
+                >
+                  {updateUserMutation.isPending || updateUserAvatarMutation.isPending ? 'Saving...' : 'Save'}
                 </Button>
               </div>
             </form>

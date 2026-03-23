@@ -1,13 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Moon, Monitor, Sun } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useCurrentProfile, useUpdateAvatar } from '@/hooks/useCurrentProfile'
-import { toHumanErrorMessage } from '@/lib/errors'
+import { useCurrentProfile } from '@/hooks/useCurrentProfile'
 import { useTheme, type ThemeMode } from '@/store/ThemeContext'
 
 const modeCards: Array<{ value: ThemeMode; label: string; description: string; icon: typeof Sun }> = [
@@ -48,20 +46,11 @@ export default function SettingsPage() {
   const location = useLocation()
   const { mode, resolvedTheme, setMode } = useTheme()
   const { data: profile } = useCurrentProfile()
-  const updateAvatarMutation = useUpdateAvatar()
   const [activeSection, setActiveSection] = useState<SettingsSection>('profile')
 
   const [defaultFacility, setDefaultFacility] = useState('main-facility')
   const [defaultShift, setDefaultShift] = useState('day')
   const [showInactiveAssets, setShowInactiveAssets] = useState(false)
-
-  const [editorOpen, setEditorOpen] = useState(false)
-  const [imageElement, setImageElement] = useState<HTMLImageElement | null>(null)
-  const [imageUrl, setImageUrl] = useState<string | null>(null)
-  const [zoom, setZoom] = useState(1)
-  const [offsetX, setOffsetX] = useState(0)
-  const [offsetY, setOffsetY] = useState(0)
-  const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   const locationState = (location.state as SettingsLocationState | null) ?? null
 
@@ -79,119 +68,6 @@ export default function SettingsPage() {
     const emailLocal = profile?.email?.split('@')[0] ?? 'U'
     return emailLocal.slice(0, 2).toUpperCase()
   }, [profile?.email, profile?.full_name])
-
-  const renderPreview = () => {
-    const canvas = canvasRef.current
-    if (!canvas || !imageElement) return
-
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    const target = 256
-    canvas.width = target
-    canvas.height = target
-
-    ctx.clearRect(0, 0, target, target)
-
-    const baseScale = Math.max(target / imageElement.width, target / imageElement.height)
-    const scaledWidth = imageElement.width * baseScale * zoom
-    const scaledHeight = imageElement.height * baseScale * zoom
-
-    const dx = (target - scaledWidth) / 2 + offsetX
-    const dy = (target - scaledHeight) / 2 + offsetY
-
-    ctx.drawImage(imageElement, dx, dy, scaledWidth, scaledHeight)
-  }
-
-  useEffect(() => {
-    renderPreview()
-  }, [imageElement, zoom, offsetX, offsetY])
-
-  useEffect(() => {
-    return () => {
-      if (imageUrl) URL.revokeObjectURL(imageUrl)
-    }
-  }, [imageUrl])
-
-  const onSelectImage = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    if (!file.type.startsWith('image/')) {
-      toast.error('Select a valid image file.')
-      return
-    }
-
-    const nextUrl = URL.createObjectURL(file)
-    const img = new Image()
-    img.onload = () => {
-      if (imageUrl) URL.revokeObjectURL(imageUrl)
-      setImageUrl(nextUrl)
-      setImageElement(img)
-      setZoom(1)
-      setOffsetX(0)
-      setOffsetY(0)
-      setEditorOpen(true)
-    }
-    img.src = nextUrl
-  }
-
-  const onSaveAvatar = async () => {
-    if (!imageElement) return
-
-    const exportCanvas = document.createElement('canvas')
-    const target = 512
-    exportCanvas.width = target
-    exportCanvas.height = target
-    const ctx = exportCanvas.getContext('2d')
-
-    if (!ctx) {
-      toast.error('Unable to process image.')
-      return
-    }
-
-    const baseScale = Math.max(target / imageElement.width, target / imageElement.height)
-    const scaledWidth = imageElement.width * baseScale * zoom
-    const scaledHeight = imageElement.height * baseScale * zoom
-
-    const dx = (target - scaledWidth) / 2 + offsetX * 2
-    const dy = (target - scaledHeight) / 2 + offsetY * 2
-
-    ctx.clearRect(0, 0, target, target)
-    ctx.drawImage(imageElement, dx, dy, scaledWidth, scaledHeight)
-
-    const blob = await new Promise<Blob | null>((resolve) => {
-      exportCanvas.toBlob((generatedBlob) => resolve(generatedBlob), 'image/webp', 0.72)
-    })
-
-    if (!blob) {
-      toast.error('Failed to compress avatar image.')
-      return
-    }
-
-    try {
-      await updateAvatarMutation.mutateAsync(blob)
-      toast.success('Profile photo updated.')
-      setEditorOpen(false)
-    } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to update avatar.'))
-    }
-  }
-
-  const onRemoveAvatar = async () => {
-    try {
-      await updateAvatarMutation.mutateAsync(null)
-      toast.success('Profile photo removed.')
-      setEditorOpen(false)
-      setImageElement(null)
-      if (imageUrl) {
-        URL.revokeObjectURL(imageUrl)
-        setImageUrl(null)
-      }
-    } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to remove avatar.'))
-    }
-  }
 
   const onBack = () => {
     const currentPath = `${location.pathname}${location.search}`
@@ -264,54 +140,10 @@ export default function SettingsPage() {
                           </div>
                         )}
                         <div className="space-y-1">
-                          <Label htmlFor="avatarInput" className="text-sm">Upload</Label>
-                          <Input id="avatarInput" type="file" accept="image/*" onChange={onSelectImage} className="h-9 text-sm" />
-                          <p className="text-xs text-muted-foreground">Square photos work best.</p>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-9 px-3"
-                            onClick={() => void onRemoveAvatar()}
-                            disabled={!profile?.avatar_url || updateAvatarMutation.isPending}
-                          >
-                            Remove
-                          </Button>
+                          <Label className="text-sm">Photo Management</Label>
+                          <p className="text-xs text-muted-foreground">Admin-managed.</p>
                         </div>
                       </div>
-
-                      {editorOpen ? (
-                        <div className="space-y-4 rounded-md border border-border/70 bg-muted/10 p-4">
-                          <div className="flex flex-wrap items-start gap-6">
-                            <div className="space-y-2">
-                              <p className="text-sm font-medium">Preview</p>
-                              <canvas ref={canvasRef} className="h-40 w-40 rounded-full border border-border object-cover" />
-                            </div>
-                            <div className="min-w-[240px] flex-1 space-y-3">
-                              <div className="space-y-1">
-                                <Label htmlFor="zoom" className="text-sm">Zoom</Label>
-                                <Input id="zoom" type="range" min={1} max={3} step={0.01} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="h-9" />
-                              </div>
-                              <div className="space-y-1">
-                                <Label htmlFor="offsetX" className="text-sm">Left / Right</Label>
-                                <Input id="offsetX" type="range" min={-120} max={120} step={1} value={offsetX} onChange={(e) => setOffsetX(Number(e.target.value))} className="h-9" />
-                              </div>
-                              <div className="space-y-1">
-                                <Label htmlFor="offsetY" className="text-sm">Up / Down</Label>
-                                <Input id="offsetY" type="range" min={-120} max={120} step={1} value={offsetY} onChange={(e) => setOffsetY(Number(e.target.value))} className="h-9" />
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex justify-end gap-2">
-                            <Button type="button" variant="outline" size="sm" className="h-9 px-3" onClick={() => setEditorOpen(false)}>
-                              Cancel
-                            </Button>
-                            <Button type="button" size="sm" className="h-9 px-3" onClick={() => void onSaveAvatar()} disabled={updateAvatarMutation.isPending}>
-                              {updateAvatarMutation.isPending ? 'Saving...' : 'Save'}
-                            </Button>
-                          </div>
-                        </div>
-                      ) : null}
                     </div>
                   </div>
 

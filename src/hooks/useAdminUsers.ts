@@ -13,6 +13,7 @@ export interface AdminUserRow {
   phone: string | null
   is_active: boolean
   created_at: string
+  updated_at: string
   role_code: RoleCode | null
   role_title: string | null
   company_id: string | null
@@ -37,13 +38,27 @@ interface UpdateUserPayload {
   email: string
   fullName: string
   phone: string
+  expectedUpdatedAt?: string
   roleCode: RoleCode
   roleTitle: string
   companyIds?: string[]
   facilityIds?: string[]
 }
 
+interface UpdateUserAvatarPayload {
+  userId: string
+  avatarBlob: Blob | null
+  expectedUpdatedAt?: string
+}
+
 const usersQueryKey = ['admin', 'users'] as const
+
+function mergeAdminUserCache(queryClient: ReturnType<typeof useQueryClient>, userId: string, patch: Partial<AdminUserRow>) {
+  queryClient.setQueryData<AdminUserRow[]>(usersQueryKey, (previous) => {
+    if (!previous) return previous
+    return previous.map((row) => (row.id === userId ? { ...row, ...patch } : row))
+  })
+}
 
 const defaultRoleTitleByCode: Record<RoleCode, string> = {
   L1: 'Technician',
@@ -80,6 +95,60 @@ async function parseFunctionInvokeError(error: unknown): Promise<never> {
   }
 
   throw error
+}
+
+async function invokeAdminFunction<TResponse>(
+  functionName: string,
+  body: Record<string, unknown>,
+): Promise<TResponse | null> {
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+
+  if (sessionError) {
+    throw sessionError
+  }
+
+  let activeSession = sessionData.session
+
+  if (activeSession?.expires_at && activeSession.expires_at * 1000 <= Date.now() + 60_000) {
+    const { data: refreshedData, error: refreshError } = await supabase.auth.refreshSession()
+    if (refreshError) {
+      throw refreshError
+    }
+    activeSession = refreshedData.session
+  }
+
+  const accessToken = activeSession?.access_token
+  if (!accessToken) {
+    throw new Error('Your session expired. Please sign in again.')
+  }
+
+  const runInvoke = async () => {
+    const response = await supabase.functions.invoke(functionName, { body })
+
+    return response
+  }
+
+  let { data, error } = await runInvoke()
+
+  if (error) {
+    const maybeContext = (error as { context?: Response })?.context
+    const shouldRetryForJwt = maybeContext?.status === 401
+
+    if (shouldRetryForJwt) {
+      const { data: refreshedData, error: refreshError } = await supabase.auth.refreshSession()
+      if (!refreshError && refreshedData.session?.access_token) {
+        const retryResult = await runInvoke()
+        data = retryResult.data
+        error = retryResult.error
+      }
+    }
+  }
+
+  if (error) {
+    await parseFunctionInvokeError(error)
+  }
+
+  return (data as TResponse | null) ?? null
 }
 
 async function upsertSingleRoleForUser(payload: { userId: string; roleCode: RoleCode; roleTitle: string }) {
@@ -230,7 +299,7 @@ export function useAdminUsers() {
       const [profilesResponse, rolesResponse, companiesResponse, facilitiesResponse] = await Promise.all([
         supabase
           .from('profiles')
-          .select('id, employee_id, full_name, email, avatar_url, phone, is_active, created_at')
+          .select('id, employee_id, full_name, email, avatar_url, phone, is_active, created_at, updated_at')
           .order('created_at', { ascending: false }),
         supabase
           .from('user_role_assignments')
@@ -290,6 +359,7 @@ export function useAdminUsers() {
           phone: profile.phone,
           is_active: profile.is_active,
           created_at: profile.created_at,
+          updated_at: profile.updated_at,
           role_code: role?.role_code ?? null,
           role_title: role?.role_title ?? null,
           company_id: companyIds[0] ?? null,
@@ -300,6 +370,10 @@ export function useAdminUsers() {
         } as AdminUserRow
       })
     },
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    staleTime: 5_000,
+    refetchInterval: 15_000,
   })
 }
 
@@ -308,7 +382,7 @@ export function useToggleUserActive() {
   const { user } = useAuth()
 
   return useMutation({
-    mutationFn: async (payload: { userId: string; isActive: boolean }) => {
+    mutationFn: async (payload: { userId: string; isActive: boolean; expectedUpdatedAt?: string }) => {
       if (user?.id === payload.userId && payload.isActive === false) {
         throw new Error('You cannot deactivate your own account.')
       }
@@ -343,30 +417,39 @@ export function useToggleUserActive() {
         }
       }
 
-      const { error } = await supabase
+      let updateQuery = supabase
         .from('profiles')
         .update({ is_active: payload.isActive })
         .eq('id', payload.userId)
 
-      if (error) {
-        throw error
+      if (payload.expectedUpdatedAt) {
+        updateQuery = updateQuery.eq('updated_at', payload.expectedUpdatedAt)
       }
 
-      const { data: verifyRow, error: verifyError } = await supabase
-        .from('profiles')
-        .select('id, is_active')
-        .eq('id', payload.userId)
-        .maybeSingle<{ id: string; is_active: boolean }>()
+      const { data: updatedRows, error: updateError } = await updateQuery
+        .select('id, is_active, updated_at')
+        .limit(1)
 
-      if (verifyError) {
-        throw verifyError
+      if (updateError) {
+        throw updateError
       }
 
-      if (!verifyRow || verifyRow.is_active !== payload.isActive) {
+      const updatedRow = updatedRows?.[0]
+      if (!updatedRow) {
+        throw new Error('This user was modified by another admin. Refresh and try again.')
+      }
+
+      if (updatedRow.is_active !== payload.isActive) {
         throw new Error('Status update was not applied. Check admin permissions and row-level policies.')
       }
+
+      return updatedRow
     },
-    onSuccess: async () => {
+    onSuccess: async (updatedRow, variables) => {
+      mergeAdminUserCache(queryClient, variables.userId, {
+        is_active: variables.isActive,
+        updated_at: updatedRow.updated_at,
+      })
       await queryClient.invalidateQueries({ queryKey: usersQueryKey })
     },
   })
@@ -379,17 +462,11 @@ export function useCreateAdminUser() {
     mutationFn: async (payload: CreateUserPayload) => {
       const roleTitle = payload.roleTitle?.trim() || defaultRoleTitleByCode[payload.roleCode]
 
-      const { data, error } = await supabase.functions.invoke('admin-create-user', {
-        body: {
-          email: payload.email,
-          full_name: payload.fullName,
-          phone: payload.phone,
-        },
+      const data = await invokeAdminFunction<{ user_id?: string }>('admin-create-user', {
+        email: payload.email,
+        full_name: payload.fullName,
+        phone: payload.phone,
       })
-
-      if (error) {
-        await parseFunctionInvokeError(error)
-      }
 
       const userId = (data as { user_id?: string } | null)?.user_id
       if (!userId) {
@@ -417,17 +494,45 @@ export function useUpdateAdminUser() {
 
   return useMutation({
     mutationFn: async (payload: UpdateUserPayload) => {
-      const { error: updateError } = await supabase.functions.invoke('admin-update-user', {
-        body: {
-          user_id: payload.userId,
+      if (payload.expectedUpdatedAt) {
+        const { data: current, error: currentError } = await supabase
+          .from('profiles')
+          .select('updated_at')
+          .eq('id', payload.userId)
+          .maybeSingle<{ updated_at: string }>()
+
+        if (currentError) {
+          throw currentError
+        }
+
+        if (!current || current.updated_at !== payload.expectedUpdatedAt) {
+          throw new Error('This user was updated by another admin. Refresh and retry.')
+        }
+      }
+
+      let profileUpdateQuery = supabase
+        .from('profiles')
+        .update({
           email: payload.email,
           full_name: payload.fullName,
           phone: payload.phone,
-        },
-      })
+        })
+        .eq('id', payload.userId)
 
-      if (updateError) {
-        await parseFunctionInvokeError(updateError)
+      if (payload.expectedUpdatedAt) {
+        profileUpdateQuery = profileUpdateQuery.eq('updated_at', payload.expectedUpdatedAt)
+      }
+
+      const { data: updatedRows, error: profileUpdateError } = await profileUpdateQuery
+        .select('id, updated_at')
+        .limit(1)
+
+      if (profileUpdateError) {
+        throw profileUpdateError
+      }
+
+      if (!updatedRows || updatedRows.length === 0) {
+        throw new Error('This user was updated by another admin. Refresh and retry.')
       }
 
       await upsertSingleRoleForUser({
@@ -442,8 +547,20 @@ export function useUpdateAdminUser() {
         companyIds: payload.companyIds,
         facilityIds: payload.facilityIds,
       })
+
+      return { updated_at: updatedRows[0].updated_at ?? new Date().toISOString() }
     },
-    onSuccess: async () => {
+    onSuccess: async (result, variables) => {
+      mergeAdminUserCache(queryClient, variables.userId, {
+        full_name: variables.fullName,
+        email: variables.email,
+        phone: variables.phone,
+        role_code: variables.roleCode,
+        role_title: variables.roleTitle,
+        company_ids: variables.companyIds ?? [],
+        facility_ids: variables.facilityIds ?? [],
+        updated_at: result.updated_at,
+      })
       await queryClient.invalidateQueries({ queryKey: usersQueryKey })
     },
   })
@@ -454,17 +571,17 @@ export function useHardDeleteUser() {
 
   return useMutation({
     mutationFn: async (payload: { userId: string }) => {
-      const { error } = await supabase.functions.invoke('admin-delete-user', {
-        body: {
-          user_id: payload.userId,
-        },
+      await invokeAdminFunction('admin-delete-user', {
+        user_id: payload.userId,
       })
 
-      if (error) {
-        await parseFunctionInvokeError(error)
-      }
+      return payload.userId
     },
-    onSuccess: async () => {
+    onSuccess: async (deletedUserId) => {
+      queryClient.setQueryData<AdminUserRow[]>(usersQueryKey, (previous) => {
+        if (!previous) return previous
+        return previous.filter((row) => row.id !== deletedUserId)
+      })
       await queryClient.invalidateQueries({ queryKey: usersQueryKey })
     },
   })
@@ -473,15 +590,69 @@ export function useHardDeleteUser() {
 export function useResetAdminUserPassword() {
   return useMutation({
     mutationFn: async (payload: { userId: string }) => {
-      const { error } = await supabase.functions.invoke('admin-reset-user-password', {
-        body: {
-          user_id: payload.userId,
-        },
+      await invokeAdminFunction('admin-reset-user-password', {
+        user_id: payload.userId,
       })
+    },
+  })
+}
 
-      if (error) {
-        await parseFunctionInvokeError(error)
+export function useAdminUpdateUserAvatar() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (payload: UpdateUserAvatarPayload) => {
+      const storagePath = `${payload.userId}/avatar.webp`
+      let avatarUrl: string | null = null
+
+      if (payload.avatarBlob) {
+        const { error: uploadError } = await supabase.storage
+          .from('avatars')
+          .upload(storagePath, payload.avatarBlob, { upsert: true, contentType: 'image/webp' })
+
+        if (uploadError) {
+          throw uploadError
+        }
+
+        const { data: publicUrlData } = supabase.storage.from('avatars').getPublicUrl(storagePath)
+        avatarUrl = `${publicUrlData.publicUrl}?v=${Date.now()}`
+      } else {
+        const { error: removeError } = await supabase.storage.from('avatars').remove([storagePath])
+        if (removeError && !String(removeError.message ?? '').toLowerCase().includes('not found')) {
+          throw removeError
+        }
       }
+
+      let updateQuery = supabase
+        .from('profiles')
+        .update({ avatar_url: avatarUrl })
+        .eq('id', payload.userId)
+
+      if (payload.expectedUpdatedAt) {
+        updateQuery = updateQuery.eq('updated_at', payload.expectedUpdatedAt)
+      }
+
+      const { data: updatedRows, error: updateError } = await updateQuery
+        .select('avatar_url, updated_at')
+        .limit(1)
+
+      if (updateError) {
+        throw updateError
+      }
+
+      const updatedRow = updatedRows?.[0]
+      if (!updatedRow) {
+        throw new Error('This user was updated by another admin. Refresh and retry.')
+      }
+
+      return updatedRow
+    },
+    onSuccess: async (result, variables) => {
+      mergeAdminUserCache(queryClient, variables.userId, {
+        avatar_url: result.avatar_url,
+        updated_at: result.updated_at,
+      })
+      await queryClient.invalidateQueries({ queryKey: usersQueryKey })
     },
   })
 }
