@@ -63,6 +63,25 @@ export default function SettingsPage() {
   const [offsetY, setOffsetY] = useState(0)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
+  const previewSize = 256
+  const wheelZoomSensitivity = 0.002
+
+  // Base scale to fit the image inside the preview canvas at zoom 1
+  const baseScale = useMemo(
+    () => (imageElement ? Math.max(previewSize / imageElement.width, previewSize / imageElement.height) : 1),
+    [imageElement],
+  )
+
+  const maxPanX = useMemo(() => {
+    if (!imageElement) return 0
+    return Math.max(0, (imageElement.width * baseScale * zoom - previewSize) / 2)
+  }, [imageElement, baseScale, zoom])
+
+  const maxPanY = useMemo(() => {
+    if (!imageElement) return 0
+    return Math.max(0, (imageElement.height * baseScale * zoom - previewSize) / 2)
+  }, [imageElement, baseScale, zoom])
+
   const locationState = (location.state as SettingsLocationState | null) ?? null
 
   const initials = useMemo(() => {
@@ -87,31 +106,59 @@ export default function SettingsPage() {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const target = 256
+    const target = previewSize
     canvas.width = target
     canvas.height = target
 
     ctx.clearRect(0, 0, target, target)
 
-    const baseScale = Math.max(target / imageElement.width, target / imageElement.height)
     const scaledWidth = imageElement.width * baseScale * zoom
     const scaledHeight = imageElement.height * baseScale * zoom
 
-    const dx = (target - scaledWidth) / 2 + offsetX
-    const dy = (target - scaledHeight) / 2 + offsetY
+    const clampedX = Math.max(-maxPanX, Math.min(maxPanX, offsetX))
+    const clampedY = Math.max(-maxPanY, Math.min(maxPanY, offsetY))
+
+    const dx = (target - scaledWidth) / 2 + clampedX
+    const dy = (target - scaledHeight) / 2 + clampedY
 
     ctx.drawImage(imageElement, dx, dy, scaledWidth, scaledHeight)
   }
 
   useEffect(() => {
     renderPreview()
-  }, [imageElement, zoom, offsetX, offsetY])
+  }, [imageElement, zoom, offsetX, offsetY, maxPanX, maxPanY])
 
   useEffect(() => {
     return () => {
       if (imageUrl) URL.revokeObjectURL(imageUrl)
     }
   }, [imageUrl])
+
+  // Prevent browser/page zoom when the editor is open; scroll wheel adjusts image zoom instead
+  useEffect(() => {
+    if (!editorOpen) return
+    const handler = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) e.preventDefault()
+    }
+    document.addEventListener('wheel', handler, { passive: false })
+    return () => document.removeEventListener('wheel', handler)
+  }, [editorOpen])
+
+  const handleZoomChange = (newZoom: number) => {
+    if (!imageElement) return
+    const newMaxX = Math.max(0, (imageElement.width * baseScale * newZoom - previewSize) / 2)
+    const newMaxY = Math.max(0, (imageElement.height * baseScale * newZoom - previewSize) / 2)
+    setZoom(newZoom)
+    setOffsetX((prev) => Math.max(-newMaxX, Math.min(newMaxX, prev)))
+    setOffsetY((prev) => Math.max(-newMaxY, Math.min(newMaxY, prev)))
+  }
+
+  const handleEditorWheel = (e: React.WheelEvent) => {
+    e.preventDefault()
+    const delta = -e.deltaY * wheelZoomSensitivity
+    const newZoom = Math.max(1, Math.min(3, zoom + delta))
+    handleZoomChange(newZoom)
+  }
 
   const onSelectImage = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -150,12 +197,15 @@ export default function SettingsPage() {
       return
     }
 
-    const baseScale = Math.max(target / imageElement.width, target / imageElement.height)
-    const scaledWidth = imageElement.width * baseScale * zoom
-    const scaledHeight = imageElement.height * baseScale * zoom
+    const exportScale = target / previewSize
+    const scaledWidth = imageElement.width * baseScale * exportScale * zoom
+    const scaledHeight = imageElement.height * baseScale * exportScale * zoom
 
-    const dx = (target - scaledWidth) / 2 + offsetX * 2
-    const dy = (target - scaledHeight) / 2 + offsetY * 2
+    const clampedX = Math.max(-maxPanX, Math.min(maxPanX, offsetX))
+    const clampedY = Math.max(-maxPanY, Math.min(maxPanY, offsetY))
+
+    const dx = (target - scaledWidth) / 2 + clampedX * exportScale
+    const dy = (target - scaledHeight) / 2 + clampedY * exportScale
 
     ctx.clearRect(0, 0, target, target)
     ctx.drawImage(imageElement, dx, dy, scaledWidth, scaledHeight)
@@ -281,7 +331,7 @@ export default function SettingsPage() {
                       </div>
 
                       {editorOpen ? (
-                        <div className="space-y-4 rounded-md border border-border/70 bg-muted/10 p-4">
+                        <div className="space-y-4 rounded-md border border-border/70 bg-muted/10 p-4" onWheel={handleEditorWheel}>
                           <div className="flex flex-wrap items-start gap-6">
                             <div className="space-y-2">
                               <p className="text-sm font-medium">Preview</p>
@@ -290,15 +340,15 @@ export default function SettingsPage() {
                             <div className="min-w-[240px] flex-1 space-y-3">
                               <div className="space-y-1">
                                 <Label htmlFor="zoom" className="text-sm">Zoom</Label>
-                                <Input id="zoom" type="range" min={1} max={3} step={0.01} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="h-9" />
+                                <Input id="zoom" type="range" min={1} max={3} step={0.01} value={zoom} onChange={(e) => handleZoomChange(Number(e.target.value))} className="h-9" />
                               </div>
                               <div className="space-y-1">
                                 <Label htmlFor="offsetX" className="text-sm">Left / Right</Label>
-                                <Input id="offsetX" type="range" min={-120} max={120} step={1} value={offsetX} onChange={(e) => setOffsetX(Number(e.target.value))} className="h-9" />
+                                <Input id="offsetX" type="range" min={-maxPanX} max={maxPanX} step={1} value={offsetX} onChange={(e) => setOffsetX(Number(e.target.value))} className="h-9" />
                               </div>
                               <div className="space-y-1">
                                 <Label htmlFor="offsetY" className="text-sm">Up / Down</Label>
-                                <Input id="offsetY" type="range" min={-120} max={120} step={1} value={offsetY} onChange={(e) => setOffsetY(Number(e.target.value))} className="h-9" />
+                                <Input id="offsetY" type="range" min={-maxPanY} max={maxPanY} step={1} value={offsetY} onChange={(e) => setOffsetY(Number(e.target.value))} className="h-9" />
                               </div>
                             </div>
                           </div>
