@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowDown, ArrowDownUp, ArrowUp, Eye, Plus, Power, PowerOff, Search, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowDownUp, ArrowUp, CircleHelp, Eye, Plus, Power, PowerOff, RefreshCw, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -15,18 +15,16 @@ import {
   type AdminCompanyRow,
   useAdminCompanies,
   useCreateCompany,
-  useHardDeleteCompany,
   useToggleCompanyActive,
 } from '@/hooks/useAdminOrganizations'
 import { toHumanErrorMessage } from '@/lib/errors'
 
 const createCompanySchema = z.object({
   companyName: z.string().min(2, 'Company name is required.'),
-  billingAddress: z.string().min(5, 'Billing address is required.'),
 })
 
 type CreateCompanyFormValues = z.infer<typeof createCompanySchema>
-type CompanySortKey = 'company_code' | 'company_name' | 'scoped_user_count' | 'created_at'
+type CompanySortKey = 'company_code' | 'company_name' | 'created_at' | 'updated_at'
 type SortDirection = 'asc' | 'desc'
 
 function sortIcon(active: boolean, direction: SortDirection) {
@@ -43,10 +41,9 @@ function sortButtonClass(active: boolean) {
 export default function ClientManagementPage() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { data: companies = [], isLoading: companiesLoading } = useAdminCompanies()
+  const { data: companies = [], isLoading: companiesLoading, isFetching, refetch } = useAdminCompanies()
   const createCompanyMutation = useCreateCompany()
   const toggleCompanyMutation = useToggleCompanyActive()
-  const deleteCompanyMutation = useHardDeleteCompany()
 
   const [companySearch, setCompanySearch] = useState('')
   const [companySortKey, setCompanySortKey] = useState<CompanySortKey>('created_at')
@@ -57,9 +54,6 @@ export default function ClientManagementPage() {
   const [lastSelectedCompanyIndex, setLastSelectedCompanyIndex] = useState<number | null>(null)
 
   const [isCompanyOpen, setIsCompanyOpen] = useState(false)
-  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false)
-  const [deleteConfirmInput, setDeleteConfirmInput] = useState('')
-  const [deleteTargetCompany, setDeleteTargetCompany] = useState<AdminCompanyRow | null>(null)
   const tableContainerRef = useRef<HTMLDivElement | null>(null)
 
   const {
@@ -71,7 +65,6 @@ export default function ClientManagementPage() {
     resolver: zodResolver(createCompanySchema),
     defaultValues: {
       companyName: '',
-      billingAddress: '',
     },
   })
 
@@ -79,17 +72,13 @@ export default function ClientManagementPage() {
     const query = companySearch.trim().toLowerCase()
     const rows = companies.filter((company) => {
       if (!query) return true
-      return [company.company_code, company.company_name, company.billing_address].join(' ').toLowerCase().includes(query)
+      return [company.company_code, company.company_name].join(' ').toLowerCase().includes(query)
     })
 
     rows.sort((a, b) => {
       const direction = companySortDirection === 'asc' ? 1 : -1
-      if (companySortKey === 'created_at') {
-        return (new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) * direction
-      }
-
-      if (companySortKey === 'scoped_user_count') {
-        return (a.scoped_user_count - b.scoped_user_count) * direction
+      if (companySortKey === 'created_at' || companySortKey === 'updated_at') {
+        return (new Date(a[companySortKey]).getTime() - new Date(b[companySortKey]).getTime()) * direction
       }
 
       return `${a[companySortKey] ?? ''}`.localeCompare(`${b[companySortKey] ?? ''}`) * direction
@@ -196,31 +185,6 @@ export default function ClientManagementPage() {
     }
   }
 
-  const openDeleteCompanyConfirm = (company: AdminCompanyRow) => {
-    setDeleteTargetCompany(company)
-    setDeleteConfirmInput('')
-    setIsDeleteConfirmOpen(true)
-  }
-
-  const onConfirmHardDelete = async () => {
-    if (!deleteTargetCompany) return
-
-    if (deleteConfirmInput.trim() !== deleteTargetCompany.company_code) {
-      toast.error('Type the exact Account ID to confirm deletion.')
-      return
-    }
-
-    try {
-      await deleteCompanyMutation.mutateAsync({ companyId: deleteTargetCompany.id })
-      toast.success('Account permanently deleted.')
-      setDeleteConfirmInput('')
-      setDeleteTargetCompany(null)
-      setIsDeleteConfirmOpen(false)
-    } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to delete account.'))
-    }
-  }
-
   const clientFallback = (company: AdminCompanyRow) => {
     const token = company.company_name.trim() || 'C'
     return token.slice(0, 1).toUpperCase()
@@ -258,51 +222,81 @@ export default function ClientManagementPage() {
   return (
     <main className="space-y-6 p-6">
       <Card>
-        <CardHeader>
+        <CardHeader className="sticky top-0 z-20 rounded-t-xl border-b border-border/70 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <CardTitle className="text-2xl tracking-tight">Accounts</CardTitle>
-              <CardDescription>Create, search, sort, and open full account details.</CardDescription>
+              <CardDescription>Manage accounts.</CardDescription>
             </div>
-            <Button className="inline-flex h-9 items-center justify-center gap-2 px-3" onClick={() => setIsCompanyOpen(true)}>
-              <Plus className="h-4 w-4" />
-              Add
-            </Button>
+            <div className="ml-auto flex items-center gap-2">
+              <TooltipIconButton className="h-9 w-9" onClick={() => setIsCompanyOpen(true)} tooltip="Add account" aria-label="Add account">
+                <Plus className="h-4 w-4" />
+              </TooltipIconButton>
+              <TooltipIconButton
+                className="h-9 w-9"
+                onClick={() => {
+                  void refetch()
+                }}
+                tooltip="Refresh"
+                aria-label="Refresh"
+              >
+                <RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+              </TooltipIconButton>
+            </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input value={companySearch} onChange={(event) => setCompanySearch(event.target.value)} className="h-9 pl-9" placeholder="Search by id, name" />
-          </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/10 p-2.5">
-            <p className="px-1 text-sm text-muted-foreground">{selectedCompanies.length} selected</p>
-            <div className="flex items-center gap-1.5">
-              <TooltipIconButton className="h-8 w-8" onClick={() => void onBulkToggleCompanies(true)} disabled={selectedCompanies.length === 0} tooltip="Activate selected accounts">
-                <Power className="h-4 w-4" />
-              </TooltipIconButton>
-              <TooltipIconButton className="h-8 w-8" onClick={() => void onBulkToggleCompanies(false)} disabled={selectedCompanies.length === 0} tooltip="Deactivate selected accounts">
-                <PowerOff className="h-4 w-4" />
-              </TooltipIconButton>
+        <CardContent className="space-y-4 pt-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative min-w-[280px] flex-1">
+              <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
+              <Input value={companySearch} onChange={(event) => setCompanySearch(event.target.value)} placeholder="Search accounts" className="pl-9 pr-10" />
+              <div className="absolute right-2 top-1.5">
+                <TooltipIconButton
+                  className="h-7 w-7 border-transparent"
+                  tooltip="Search by ID or name."
+                  aria-label="Search help"
+                >
+                  <CircleHelp className="h-4 w-4" />
+                </TooltipIconButton>
+              </div>
             </div>
           </div>
 
-          {canSelectFiltered ? (
-            <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-              All {pageCompanyIds.length} accounts on this page are selected.
-              <Button type="button" variant="link" className="h-auto px-1 text-sm" onClick={onSelectFilteredCompanies}>
-                Select all {filteredCompanies.length} accounts
-              </Button>
-            </div>
-          ) : null}
-
-          {allFilteredSelected && selectedCompanyIds.length > 0 ? (
-            <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-              All {filteredCompanies.length} accounts are selected.
-              <Button type="button" variant="link" className="h-auto px-1 text-sm" onClick={() => setSelectedCompanyIds([])}>
-                Clear selection
-              </Button>
+          {selectedCompanies.length > 0 ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/10 p-2.5">
+              <div className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
+                <span>{allFilteredSelected ? `All ${filteredCompanies.length} selected` : `${selectedCompanies.length} selected`}</span>
+                {canSelectFiltered ? (
+                  <Button type="button" variant="link" className="h-auto px-1 text-sm" onClick={onSelectFilteredCompanies}>
+                    Select all {filteredCompanies.length}
+                  </Button>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <TooltipIconButton
+                  onClick={() => setSelectedCompanyIds([])}
+                  tooltip="Clear selection"
+                  aria-label="Clear selection"
+                >
+                  <X className="h-4 w-4" />
+                </TooltipIconButton>
+                <TooltipIconButton
+                  onClick={() => void onBulkToggleCompanies(true)}
+                  tooltip="Activate selected accounts"
+                  aria-label="Activate selected accounts"
+                  disabled={false}
+                >
+                  <Power className="h-4 w-4" />
+                </TooltipIconButton>
+                <TooltipIconButton
+                  onClick={() => void onBulkToggleCompanies(false)}
+                  tooltip="Deactivate selected accounts"
+                  aria-label="Deactivate selected accounts"
+                  disabled={false}
+                >
+                  <PowerOff className="h-4 w-4" />
+                </TooltipIconButton>
+              </div>
             </div>
           ) : null}
 
@@ -310,51 +304,52 @@ export default function ClientManagementPage() {
             <p className="text-sm text-muted-foreground">Loading...</p>
           ) : (
             <div ref={tableContainerRef} className="overflow-x-auto rounded-md border border-border/70">
-              <table className="w-full text-sm">
+              <table className="w-full table-fixed text-sm">
                 <thead>
                   <tr className="border-b bg-muted/40">
-                    <th className="w-10 p-3 text-left" aria-label="Select rows">
+                    <th className="w-12 p-3 text-left" aria-label="Select rows">
                       <button
                         type="button"
-                        className="flex h-8 w-8 items-center justify-center rounded-md border border-transparent hover:border-border/70"
+                        className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50"
                         onClick={onTogglePageSelection}
                         aria-label={allPageSelected ? 'Deselect current page' : 'Select current page'}
                       >
                         <input
                           type="checkbox"
                           checked={allPageSelected && pageCompanyIds.length > 0}
-                          onChange={() => undefined}
-                          className="pointer-events-none table-select-checkbox"
+                          onChange={onTogglePageSelection}
+                          onClick={(event) => event.stopPropagation()}
+                          className="table-select-checkbox"
+                          aria-label={allPageSelected ? 'Deselect current page' : 'Select current page'}
                         />
                       </button>
                     </th>
-                    <th className="p-3 text-left">
+                    <th className="w-36 p-3 text-left">
                       <button type="button" onClick={() => onCompanySort('company_code')} className={sortButtonClass(companySortKey === 'company_code')}>
                         Account ID
                         {sortIcon(companySortKey === 'company_code', companySortDirection)}
                       </button>
                     </th>
-                    <th className="p-3 text-left">
+                    <th className="w-[30%] p-3 text-left">
                       <button type="button" onClick={() => onCompanySort('company_name')} className={sortButtonClass(companySortKey === 'company_name')}>
                         Name
                         {sortIcon(companySortKey === 'company_name', companySortDirection)}
                       </button>
                     </th>
-                    <th className="p-3 text-left">Sites</th>
-                    <th className="p-3 text-left">
-                      <button type="button" onClick={() => onCompanySort('scoped_user_count')} className={sortButtonClass(companySortKey === 'scoped_user_count')}>
-                        Users
-                        {sortIcon(companySortKey === 'scoped_user_count', companySortDirection)}
-                      </button>
-                    </th>
-                    <th className="p-3 text-left">Status</th>
-                    <th className="p-3 text-left">
+                    <th className="w-24 p-3 text-left">Status</th>
+                    <th className="w-44 p-3 text-left">
                       <button type="button" onClick={() => onCompanySort('created_at')} className={sortButtonClass(companySortKey === 'created_at')}>
                         Created
                         {sortIcon(companySortKey === 'created_at', companySortDirection)}
                       </button>
                     </th>
-                    <th className="w-[120px] p-3 text-left" aria-label="Actions" />
+                    <th className="w-44 p-3 text-left">
+                      <button type="button" onClick={() => onCompanySort('updated_at')} className={sortButtonClass(companySortKey === 'updated_at')}>
+                        Updated
+                        {sortIcon(companySortKey === 'updated_at', companySortDirection)}
+                      </button>
+                    </th>
+                    <th className="w-20 p-3 text-left" aria-label="Actions" />
                   </tr>
                 </thead>
                 <tbody>
@@ -362,30 +357,42 @@ export default function ClientManagementPage() {
                     <tr
                       key={company.id}
                       className={`group border-b transition-colors ${selectedCompanyIds.includes(company.id) ? 'bg-muted/25 ring-1 ring-inset ring-border/70' : 'hover:bg-muted/20'}`}
-                      onDoubleClick={() => navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}` } })}
-                      onClick={(event) => onSelectCompanyRow(company.id, rowIndex, { shift: event.shiftKey, multi: event.ctrlKey || event.metaKey })}
+                      onDoubleClick={() => navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}`, companyCode: company.company_code } })}
+                      onClick={(event) => {
+                        if (event.shiftKey || event.ctrlKey || event.metaKey) {
+                          onSelectCompanyRow(company.id, rowIndex, { shift: event.shiftKey, multi: event.ctrlKey || event.metaKey })
+                          return
+                        }
+                        navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}`, companyCode: company.company_code } })
+                      }}
                     >
-                      <td className="p-3">
-                        <button
-                          type="button"
-                          className="flex h-8 w-8 items-center justify-center rounded-md border border-transparent hover:border-border/70"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            setSelectedCompanyIds((prev) => (prev.includes(company.id) ? prev.filter((id) => id !== company.id) : [...prev, company.id]))
-                          }}
-                          aria-label={`Select account ${company.company_code}`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedCompanyIds.includes(company.id)}
-                            onChange={() => undefined}
-                            className="pointer-events-none table-select-checkbox"
-                          />
-                        </button>
+                      <td className="w-12 p-3 align-middle">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50">
+                          <button
+                            type="button"
+                            className="flex h-8 w-8 items-center justify-center"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setSelectedCompanyIds((prev) => (prev.includes(company.id) ? prev.filter((id) => id !== company.id) : [...prev, company.id]))
+                            }}
+                            aria-label={`Select account ${company.company_code}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedCompanyIds.includes(company.id)}
+                              onChange={() => setSelectedCompanyIds((prev) => (prev.includes(company.id) ? prev.filter((id) => id !== company.id) : [...prev, company.id]))}
+                              onClick={(event) => event.stopPropagation()}
+                              className="table-select-checkbox"
+                              aria-label={`Select account ${company.company_code}`}
+                            />
+                          </button>
+                        </div>
                       </td>
-                      <td className="p-3">{company.company_code}</td>
-                      <td className="p-3">
-                        <span className="inline-flex items-center gap-2">
+                      <td className="w-36 p-3 text-sm">
+                        <span className="block truncate">{company.company_code}</span>
+                      </td>
+                      <td className="w-[30%] p-3" title={company.company_name}>
+                        <span className="inline-flex w-full items-center gap-2">
                           {company.logo_url ? (
                             <img src={company.logo_url} alt={company.company_name} className="h-6 w-6 rounded-full border border-border object-cover" />
                           ) : (
@@ -393,44 +400,39 @@ export default function ClientManagementPage() {
                               {clientFallback(company)}
                             </span>
                           )}
-                          <span>{company.company_name}</span>
+                          <span className="min-w-0 truncate">{company.company_name}</span>
                         </span>
                       </td>
-                      <td className="p-3 text-muted-foreground">{company.facility_count}</td>
-                      <td className="p-3 text-muted-foreground">{company.scoped_user_count}</td>
-                      <td className="p-3">{company.is_active ? 'Active' : 'Inactive'}</td>
-                      <td className="p-3 text-muted-foreground">{new Date(company.created_at).toLocaleString()}</td>
-                      <td className="p-3">
+                      <td className="w-24 p-3 text-sm">{company.is_active ? 'Active' : 'Inactive'}</td>
+                      <td className="w-44 p-3 text-sm text-muted-foreground">
+                        <span className="block truncate">{new Date(company.created_at).toLocaleString()}</span>
+                      </td>
+                      <td className="w-44 p-3 text-sm text-muted-foreground">
+                        <span className="block truncate">{new Date(company.updated_at).toLocaleString()}</span>
+                      </td>
+                      <td className="w-20 p-3">
                         <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
                           <TooltipIconButton
-                            className="h-7 w-7"
                             onClick={(event) => {
                               event.stopPropagation()
-                              navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}` } })
+                              navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}`, companyCode: company.company_code } })
                             }}
+                            className="h-8 w-8"
                             tooltip="Open account details"
+                            aria-label="Open account details"
                           >
                             <Eye className="h-4 w-4" />
                           </TooltipIconButton>
                           <TooltipIconButton
-                            className="h-7 w-7"
                             onClick={(event) => {
                               event.stopPropagation()
                               void onToggleCompanyInline(company)
                             }}
-                            tooltip="Toggle account status"
+                            className="h-8 w-8"
+                            tooltip={company.is_active ? 'Deactivate account' : 'Activate account'}
+                            aria-label={company.is_active ? 'Deactivate account' : 'Activate account'}
                           >
-                            <Power className="h-4 w-4" />
-                          </TooltipIconButton>
-                          <TooltipIconButton
-                            className="h-7 w-7 hover:text-destructive"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              openDeleteCompanyConfirm(company)
-                            }}
-                            tooltip="Delete account"
-                          >
-                            <Trash2 className="h-4 w-4" />
+                            {company.is_active ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
                           </TooltipIconButton>
                         </div>
                       </td>
@@ -458,30 +460,34 @@ export default function ClientManagementPage() {
       </Card>
 
       {isCompanyOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <Card className="w-full max-w-2xl">
-            <CardHeader className="flex flex-row items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" onClick={() => setIsCompanyOpen(false)}>
+          <Card className="w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+            <CardHeader className="relative pr-20">
               <div>
                 <CardTitle>New Account</CardTitle>
-                <CardDescription>Create an account.</CardDescription>
+                <CardDescription>Create an account with basic details.</CardDescription>
               </div>
-              <Button className="h-9 px-3" variant="outline" onClick={() => setIsCompanyOpen(false)}>Close</Button>
+              <button
+                type="button"
+                className="absolute right-4 top-4 rounded-md p-1 hover:bg-muted/50"
+                onClick={() => setIsCompanyOpen(false)}
+                aria-label="Close dialog"
+              >
+                <X className="h-5 w-5" />
+              </button>
             </CardHeader>
-            <CardContent>
+            <CardContent className="pb-6">
               <form className="grid gap-4 md:grid-cols-2" onSubmit={handleSubmit(onCreateCompany)}>
-                <div className="space-y-2">
+                <div className="space-y-2 md:col-span-2">
                   <Label htmlFor="companyName">Company Name</Label>
-                  <Input id="companyName" {...register('companyName')} />
+                  <Input id="companyName" {...register('companyName')} placeholder="Enter name" />
                   {errors.companyName ? <p className="text-xs text-destructive">{errors.companyName.message}</p> : null}
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="billingAddress">Billing Address</Label>
-                  <Input id="billingAddress" {...register('billingAddress')} />
-                  {errors.billingAddress ? <p className="text-xs text-destructive">{errors.billingAddress.message}</p> : null}
-                </div>
                 <div className="md:col-span-2 flex justify-end gap-2">
-                  <Button className="h-9 px-3" type="button" variant="outline" onClick={() => setIsCompanyOpen(false)}>Cancel</Button>
-                  <Button type="submit" disabled={createCompanyMutation.isPending}>
+                  <Button className="h-9 px-3" type="button" variant="outline" onClick={() => setIsCompanyOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" disabled={createCompanyMutation.isPending} className="h-9 px-3">
                     {createCompanyMutation.isPending ? 'Creating...' : 'Create'}
                   </Button>
                 </div>
@@ -491,42 +497,7 @@ export default function ClientManagementPage() {
         </div>
       ) : null}
 
-      {isDeleteConfirmOpen && deleteTargetCompany ? (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onClick={() => setIsDeleteConfirmOpen(false)}>
-          <Card className="w-full max-w-md" onClick={(event) => event.stopPropagation()}>
-            <CardHeader>
-              <CardTitle>Confirm Permanent Delete</CardTitle>
-              <CardDescription>
-                Type {deleteTargetCompany.company_code} to permanently delete this account and all child sites.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-muted-foreground">
-                This action cannot be undone.
-              </p>
-              <Input
-                value={deleteConfirmInput}
-                onChange={(event) => setDeleteConfirmInput(event.target.value)}
-                placeholder="Enter Account ID"
-              />
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setIsDeleteConfirmOpen(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  className="h-9 px-3"
-                  onClick={() => void onConfirmHardDelete()}
-                  disabled={deleteCompanyMutation.isPending || deleteConfirmInput.trim() !== deleteTargetCompany.company_code}
-                >
-                  {deleteCompanyMutation.isPending ? 'Deleting...' : 'Delete Permanently'}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      ) : null}
+
     </main>
   )
 }

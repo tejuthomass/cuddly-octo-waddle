@@ -1,13 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Moon, Monitor, Sun } from 'lucide-react'
-import { toast } from 'sonner'
+import { ArrowLeft, BadgeCheck, Calendar, Mail, Moon, Monitor, Phone, Shield, Sun, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useCurrentProfile, useUpdateAvatar } from '@/hooks/useCurrentProfile'
-import { toHumanErrorMessage } from '@/lib/errors'
+import { useCurrentProfile } from '@/hooks/useCurrentProfile'
+import { useAuth } from '@/hooks/useAuth'
 import { useTheme, type ThemeMode } from '@/store/ThemeContext'
 
 const modeCards: Array<{ value: ThemeMode; label: string; description: string; icon: typeof Sun }> = [
@@ -31,12 +29,13 @@ const modeCards: Array<{ value: ThemeMode; label: string; description: string; i
   },
 ]
 
-type SettingsSection = 'profile' | 'preferences' | 'facility-defaults'
+type SettingsSection = 'profile' | 'preferences' | 'facility-defaults' | 'security'
 
 const sectionItems: Array<{ id: SettingsSection; label: string; helper: string }> = [
   { id: 'profile', label: 'Profile', helper: '' },
   { id: 'preferences', label: 'Theme', helper: '' },
   { id: 'facility-defaults', label: 'Defaults', helper: '' },
+  { id: 'security', label: 'Security', helper: '' },
 ]
 
 interface SettingsLocationState {
@@ -47,21 +46,13 @@ export default function SettingsPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { mode, resolvedTheme, setMode } = useTheme()
+  const { activeContext, roles } = useAuth()
   const { data: profile } = useCurrentProfile()
-  const updateAvatarMutation = useUpdateAvatar()
   const [activeSection, setActiveSection] = useState<SettingsSection>('profile')
 
   const [defaultFacility, setDefaultFacility] = useState('main-facility')
   const [defaultShift, setDefaultShift] = useState('day')
   const [showInactiveAssets, setShowInactiveAssets] = useState(false)
-
-  const [editorOpen, setEditorOpen] = useState(false)
-  const [imageElement, setImageElement] = useState<HTMLImageElement | null>(null)
-  const [imageUrl, setImageUrl] = useState<string | null>(null)
-  const [zoom, setZoom] = useState(1)
-  const [offsetX, setOffsetX] = useState(0)
-  const [offsetY, setOffsetY] = useState(0)
-  const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   const locationState = (location.state as SettingsLocationState | null) ?? null
 
@@ -80,118 +71,30 @@ export default function SettingsPage() {
     return emailLocal.slice(0, 2).toUpperCase()
   }, [profile?.email, profile?.full_name])
 
-  const renderPreview = () => {
-    const canvas = canvasRef.current
-    if (!canvas || !imageElement) return
+  const accountNames = useMemo(() => {
+    const unique = Array.from(new Set(roles.map((assignment) => assignment.clientName).filter(Boolean)))
+    return unique.length > 0 ? unique.join(', ') : '-'
+  }, [roles])
 
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    const target = 256
-    canvas.width = target
-    canvas.height = target
-
-    ctx.clearRect(0, 0, target, target)
-
-    const baseScale = Math.max(target / imageElement.width, target / imageElement.height)
-    const scaledWidth = imageElement.width * baseScale * zoom
-    const scaledHeight = imageElement.height * baseScale * zoom
-
-    const dx = (target - scaledWidth) / 2 + offsetX
-    const dy = (target - scaledHeight) / 2 + offsetY
-
-    ctx.drawImage(imageElement, dx, dy, scaledWidth, scaledHeight)
+  const roleLabelsByCode: Record<string, string> = {
+    l1_technician: 'L1 Technician',
+    l2_supervisor: 'L2 Supervisor',
+    l3_manager: 'L3 Manager',
+    l4_management: 'L4 Management',
+    l5_admin: 'L5 Admin',
+    client_viewer: 'Client',
   }
 
-  useEffect(() => {
-    renderPreview()
-  }, [imageElement, zoom, offsetX, offsetY])
+  const roleNames = useMemo(() => {
+    const unique = Array.from(new Set(roles.map((assignment) => roleLabelsByCode[assignment.role] ?? assignment.role)))
+    return unique.length > 0 ? unique.join(', ') : '-'
+  }, [roles])
 
-  useEffect(() => {
-    return () => {
-      if (imageUrl) URL.revokeObjectURL(imageUrl)
-    }
-  }, [imageUrl])
-
-  const onSelectImage = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    if (!file.type.startsWith('image/')) {
-      toast.error('Select a valid image file.')
-      return
-    }
-
-    const nextUrl = URL.createObjectURL(file)
-    const img = new Image()
-    img.onload = () => {
-      if (imageUrl) URL.revokeObjectURL(imageUrl)
-      setImageUrl(nextUrl)
-      setImageElement(img)
-      setZoom(1)
-      setOffsetX(0)
-      setOffsetY(0)
-      setEditorOpen(true)
-    }
-    img.src = nextUrl
-  }
-
-  const onSaveAvatar = async () => {
-    if (!imageElement) return
-
-    const exportCanvas = document.createElement('canvas')
-    const target = 512
-    exportCanvas.width = target
-    exportCanvas.height = target
-    const ctx = exportCanvas.getContext('2d')
-
-    if (!ctx) {
-      toast.error('Unable to process image.')
-      return
-    }
-
-    const baseScale = Math.max(target / imageElement.width, target / imageElement.height)
-    const scaledWidth = imageElement.width * baseScale * zoom
-    const scaledHeight = imageElement.height * baseScale * zoom
-
-    const dx = (target - scaledWidth) / 2 + offsetX * 2
-    const dy = (target - scaledHeight) / 2 + offsetY * 2
-
-    ctx.clearRect(0, 0, target, target)
-    ctx.drawImage(imageElement, dx, dy, scaledWidth, scaledHeight)
-
-    const blob = await new Promise<Blob | null>((resolve) => {
-      exportCanvas.toBlob((generatedBlob) => resolve(generatedBlob), 'image/webp', 0.72)
-    })
-
-    if (!blob) {
-      toast.error('Failed to compress avatar image.')
-      return
-    }
-
-    try {
-      await updateAvatarMutation.mutateAsync(blob)
-      toast.success('Profile photo updated.')
-      setEditorOpen(false)
-    } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to update avatar.'))
-    }
-  }
-
-  const onRemoveAvatar = async () => {
-    try {
-      await updateAvatarMutation.mutateAsync(null)
-      toast.success('Profile photo removed.')
-      setEditorOpen(false)
-      setImageElement(null)
-      if (imageUrl) {
-        URL.revokeObjectURL(imageUrl)
-        setImageUrl(null)
-      }
-    } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to remove avatar.'))
-    }
-  }
+  const primaryRole = activeContext?.role ?? roles[0]?.role ?? null
+  const isGlobalRole = primaryRole === 'l4_management' || primaryRole === 'l5_admin'
+  const signedInContextLabel = activeContext?.clientName
+    ? `${activeContext.clientName} (${roleLabelsByCode[activeContext.role] ?? activeContext.role})`
+    : null
 
   const onBack = () => {
     const currentPath = `${location.pathname}${location.search}`
@@ -248,14 +151,13 @@ export default function SettingsPage() {
 
               {activeSection === 'profile' ? (
                 <div className="space-y-4">
-                  <div className="rounded-md border border-border/70">
-                    <div className="flex items-start justify-between gap-4 border-b border-border/70 px-4 py-4">
-                      <div>
-                        <p className="text-sm font-medium">Photo</p>
-                      </div>
-                    </div>
-                    <div className="space-y-4 px-4 py-4">
-                      <div className="flex flex-wrap items-center gap-4">
+                  <div id="profile-photo" className="rounded-md border border-border/70">
+                    <div className="space-y-0">
+                      <div className="flex items-center justify-between gap-4 border-b border-border/70 px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <User className="h-4 w-4 text-muted-foreground" />
+                          <p className="text-sm font-medium">Profile picture</p>
+                        </div>
                         {profile?.avatar_url ? (
                           <img src={profile.avatar_url} alt="Profile avatar" className="h-14 w-14 rounded-full border border-border object-cover" />
                         ) : (
@@ -263,67 +165,77 @@ export default function SettingsPage() {
                             {initials}
                           </div>
                         )}
-                        <div className="space-y-1">
-                          <Label htmlFor="avatarInput" className="text-sm">Upload</Label>
-                          <Input id="avatarInput" type="file" accept="image/*" onChange={onSelectImage} className="h-9 text-sm" />
-                          <p className="text-xs text-muted-foreground">Square photos work best.</p>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-9 px-3"
-                            onClick={() => void onRemoveAvatar()}
-                            disabled={!profile?.avatar_url || updateAvatarMutation.isPending}
-                          >
-                            Remove
-                          </Button>
-                        </div>
                       </div>
 
-                      {editorOpen ? (
-                        <div className="space-y-4 rounded-md border border-border/70 bg-muted/10 p-4">
-                          <div className="flex flex-wrap items-start gap-6">
-                            <div className="space-y-2">
-                              <p className="text-sm font-medium">Preview</p>
-                              <canvas ref={canvasRef} className="h-40 w-40 rounded-full border border-border object-cover" />
-                            </div>
-                            <div className="min-w-[240px] flex-1 space-y-3">
-                              <div className="space-y-1">
-                                <Label htmlFor="zoom" className="text-sm">Zoom</Label>
-                                <Input id="zoom" type="range" min={1} max={3} step={0.01} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="h-9" />
-                              </div>
-                              <div className="space-y-1">
-                                <Label htmlFor="offsetX" className="text-sm">Left / Right</Label>
-                                <Input id="offsetX" type="range" min={-120} max={120} step={1} value={offsetX} onChange={(e) => setOffsetX(Number(e.target.value))} className="h-9" />
-                              </div>
-                              <div className="space-y-1">
-                                <Label htmlFor="offsetY" className="text-sm">Up / Down</Label>
-                                <Input id="offsetY" type="range" min={-120} max={120} step={1} value={offsetY} onChange={(e) => setOffsetY(Number(e.target.value))} className="h-9" />
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex justify-end gap-2">
-                            <Button type="button" variant="outline" size="sm" className="h-9 px-3" onClick={() => setEditorOpen(false)}>
-                              Cancel
-                            </Button>
-                            <Button type="button" size="sm" className="h-9 px-3" onClick={() => void onSaveAvatar()} disabled={updateAvatarMutation.isPending}>
-                              {updateAvatarMutation.isPending ? 'Saving...' : 'Save'}
-                            </Button>
+                      <div className="grid grid-cols-1 text-sm">
+                        <div className="flex items-start gap-3 border-b border-border/70 px-4 py-3">
+                          <BadgeCheck className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                          <div>
+                            <p className="font-medium">Name</p>
+                            <p className="text-muted-foreground">{profile?.full_name ?? '-'}</p>
                           </div>
                         </div>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="rounded-md border border-border/70">
-                    <div className="flex items-start justify-between gap-4 border-b border-border/70 px-4 py-3">
-                      <div>
-                        <p className="text-sm font-medium">Security</p>
-                        <p className="mt-1 text-sm text-muted-foreground">Password management.</p>
+                        <div className="flex items-start gap-3 border-b border-border/70 px-4 py-3">
+                          <Mail className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                          <div>
+                            <p className="font-medium">Email</p>
+                            <p className="text-muted-foreground">{profile?.email ?? '-'}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3 border-b border-border/70 px-4 py-3">
+                          <Phone className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                          <div>
+                            <p className="font-medium">Phone</p>
+                            <p className="text-muted-foreground">{profile?.phone ?? '-'}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3 border-b border-border/70 px-4 py-3">
+                          <Shield className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                          <div>
+                            <p className="font-medium">Role</p>
+                            <p className="text-muted-foreground">{roleNames}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3 border-b border-border/70 px-4 py-3">
+                          <User className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                          <div>
+                            <p className="font-medium">User ID</p>
+                            <p className="text-muted-foreground">{profile?.employee_id ?? '-'}</p>
+                          </div>
+                        </div>
+                        {!isGlobalRole ? (
+                          <div className="flex items-start gap-3 border-b border-border/70 px-4 py-3">
+                            <User className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                            <div>
+                              <p className="font-medium">Accounts</p>
+                              <p className="text-muted-foreground">{accountNames}</p>
+                            </div>
+                          </div>
+                        ) : null}
+                        {!isGlobalRole && signedInContextLabel ? (
+                          <div className="flex items-start gap-3 border-b border-border/70 px-4 py-3">
+                            <User className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                            <div>
+                              <p className="font-medium">Signed-in Context</p>
+                              <p className="text-muted-foreground">{signedInContextLabel}</p>
+                            </div>
+                          </div>
+                        ) : null}
+                        <div className="flex items-start gap-3 px-4 py-3">
+                          <BadgeCheck className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                          <div>
+                            <p className="font-medium">Status</p>
+                            <p className="text-muted-foreground">{profile?.is_active ? 'Active' : 'Inactive'}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-3 border-t border-border/70 px-4 py-3">
+                          <Calendar className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                          <div>
+                            <p className="font-medium">Joined</p>
+                            <p className="text-muted-foreground">{profile?.created_at ? new Date(profile.created_at).toLocaleString() : '-'}</p>
+                          </div>
+                        </div>
                       </div>
-                      <Button size="sm" className="h-9 px-3" onClick={() => navigate('/settings/password')}>
-                        Password
-                      </Button>
                     </div>
                   </div>
                 </div>
@@ -409,6 +321,20 @@ export default function SettingsPage() {
                         {showInactiveAssets ? 'On' : 'Off'}
                       </Button>
                     </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {activeSection === 'security' ? (
+                <div className="rounded-md border border-border/70">
+                  <div className="flex items-start justify-between gap-4 border-b border-border/70 px-4 py-3">
+                    <div>
+                      <p className="text-sm font-medium">Password</p>
+                      <p className="mt-1 text-sm text-muted-foreground">Manage password from a dedicated page.</p>
+                    </div>
+                    <Button size="sm" className="h-9 px-3" onClick={() => navigate('/settings/password')}>
+                      Open Password Page
+                    </Button>
                   </div>
                 </div>
               ) : null}

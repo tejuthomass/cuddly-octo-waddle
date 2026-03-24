@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { AlertTriangle, ArrowDown, ArrowDownUp, ArrowUp, CircleHelp, Eye, Filter, Pencil, Power, PowerOff, RefreshCw, Search, UserPlus, X } from 'lucide-react'
+import { AlertTriangle, ArrowDown, ArrowDownUp, ArrowLeft, ArrowRight, ArrowUp, CircleHelp, Eye, Filter, Minus, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Search, Trash2, Upload, UserPlus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -18,6 +18,7 @@ import { useCompanyOptions, useFacilityOptions } from '@/hooks/useAdminAccess'
 import { useAuth } from '@/hooks/useAuth'
 import {
   type AdminUserRow,
+  useAdminUpdateUserAvatar,
   useAdminUsers,
   useCreateAdminUser,
   useHardDeleteUser,
@@ -77,6 +78,20 @@ const detailSchema = z.object({
 type CreateFormValues = z.infer<typeof createSchema>
 type DetailFormValues = z.infer<typeof detailSchema>
 
+type AvatarEditorDraft = {
+  scale: number
+  posX: number
+  posY: number
+}
+
+type AvatarImageSize = {
+  width: number
+  height: number
+}
+
+const avatarEditorViewportSize = 320
+const avatarEditorMaxScale = 3
+
 const roleTitleByCode: Record<RoleCode, string> = {
   L1: 'Technician',
   L2: 'Supervisor',
@@ -118,6 +133,76 @@ function splitPhone(phone: string | null): { countryCode: string; phoneLocal: st
     countryCode: matchedOption?.value ?? matched,
     phoneLocal: normalized.slice(matched.length).replace(/[^\d]/g, ''),
   }
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function getAvatarMinScale(imageSize: AvatarImageSize, cropDiameter: number) {
+  return Math.max(cropDiameter / imageSize.width, cropDiameter / imageSize.height)
+}
+
+function clampAvatarEditorDraft(draft: AvatarEditorDraft, imageSize: AvatarImageSize, cropDiameter: number, maxScale = avatarEditorMaxScale): AvatarEditorDraft {
+  const minScale = getAvatarMinScale(imageSize, cropDiameter)
+  const scale = clamp(draft.scale, minScale, Math.max(minScale, maxScale))
+  const scaledW = imageSize.width * scale
+  const scaledH = imageSize.height * scale
+  const minX = cropDiameter - scaledW
+  const maxX = 0
+  const minY = cropDiameter - scaledH
+  const maxY = 0
+  const posX = clamp(draft.posX, minX, maxX)
+  const posY = clamp(draft.posY, minY, maxY)
+
+  return { scale, posX, posY }
+}
+
+function getInitialAvatarDraft(imageSize: AvatarImageSize, cropDiameter: number): AvatarEditorDraft {
+  const minScale = getAvatarMinScale(imageSize, cropDiameter)
+  const scaledW = imageSize.width * minScale
+  const scaledH = imageSize.height * minScale
+
+  return clampAvatarEditorDraft(
+    {
+      scale: minScale,
+      posX: (cropDiameter - scaledW) / 2,
+      posY: (cropDiameter - scaledH) / 2,
+    },
+    imageSize,
+    cropDiameter,
+  )
+}
+
+function getAvatarRenderMetrics(draft: AvatarEditorDraft, imageSize: AvatarImageSize, viewportSize: number, maxScale = avatarEditorMaxScale) {
+  const clamped = clampAvatarEditorDraft(draft, imageSize, viewportSize, maxScale)
+  const drawWidth = imageSize.width * clamped.scale
+  const drawHeight = imageSize.height * clamped.scale
+
+  return {
+    minScale: getAvatarMinScale(imageSize, viewportSize),
+    scale: clamped.scale,
+    drawWidth,
+    drawHeight,
+    left: clamped.posX,
+    top: clamped.posY,
+  }
+}
+
+async function loadAvatarImage(url: string): Promise<HTMLImageElement> {
+  return await new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image()
+    image.crossOrigin = 'anonymous'
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('Unable to read image.'))
+    image.src = url
+  })
+}
+
+function isJpegFile(file: File) {
+  const type = file.type.toLowerCase()
+  const name = file.name.toLowerCase()
+  return type === 'image/jpeg' || name.endsWith('.jpg') || name.endsWith('.jpeg')
 }
 
 function RequiredMark() {
@@ -213,6 +298,7 @@ export default function UserManagementPage() {
 
   const createUserMutation = useCreateAdminUser()
   const updateUserMutation = useUpdateAdminUser()
+  const updateUserAvatarMutation = useAdminUpdateUserAvatar()
   const toggleUserMutation = useToggleUserActive()
   const hardDeleteUserMutation = useHardDeleteUser()
   const resetPasswordMutation = useResetAdminUserPassword()
@@ -242,8 +328,52 @@ export default function UserManagementPage() {
   const [pendingBulkAction, setPendingBulkAction] = useState<'activate' | 'deactivate' | null>(null)
   const [pendingUserStatusAction, setPendingUserStatusAction] = useState<{ user: AdminUserRow; nextIsActive: boolean } | null>(null)
   const [lastSelectedRowIndex, setLastSelectedRowIndex] = useState<number | null>(null)
+  const [isAvatarEditorOpen, setIsAvatarEditorOpen] = useState(false)
+  const [avatarEditorSourceUrl, setAvatarEditorSourceUrl] = useState<string | null>(null)
+  const [avatarEditorImageSize, setAvatarEditorImageSize] = useState<AvatarImageSize | null>(null)
+  const [avatarEditorDraft, setAvatarEditorDraft] = useState<AvatarEditorDraft>({ scale: 1, posX: 0, posY: 0 })
+  const [avatarEditorObjectUrl, setAvatarEditorObjectUrl] = useState<string | null>(null)
+  const [pendingAvatarBlob, setPendingAvatarBlob] = useState<Blob | null | undefined>(undefined)
+  const [pendingAvatarPreviewUrl, setPendingAvatarPreviewUrl] = useState<string | null>(null)
+  const [avatarEditorValidationError, setAvatarEditorValidationError] = useState<string | null>(null)
+  const [isAvatarEditorDiscardConfirmOpen, setIsAvatarEditorDiscardConfirmOpen] = useState(false)
   const lastSelfSelectToastAtRef = useRef(0)
   const detailsPaneRef = useRef<HTMLElement | null>(null)
+  const detailAvatarInputRef = useRef<HTMLInputElement | null>(null)
+  const avatarEditorViewportRef = useRef<HTMLDivElement | null>(null)
+  const avatarEditorDragRef = useRef<{ startX: number; startY: number; posX: number; posY: number } | null>(null)
+  const avatarEditorTouchRef = useRef<{
+    startDistance: number
+    startScale: number
+    touch1Id: number
+    touch2Id: number
+  } | null>(null)
+
+  const avatarEditorMetrics = useMemo(() => {
+    if (!avatarEditorSourceUrl || !avatarEditorImageSize) return null
+    return getAvatarRenderMetrics(avatarEditorDraft, avatarEditorImageSize, avatarEditorViewportSize)
+  }, [avatarEditorDraft, avatarEditorImageSize, avatarEditorSourceUrl])
+
+  const hasPendingAvatarChange = useMemo(() => {
+    if (pendingAvatarBlob === undefined) return false
+
+    // Deleting the avatar (setting to null) when there isn't one already is a no-op state-wise
+    if (pendingAvatarBlob === null && (!selectedUser?.avatar_url)) {
+      return false
+    }
+
+    return true
+  }, [pendingAvatarBlob, selectedUser])
+
+  const detailAvatarUrl = pendingAvatarBlob === undefined ? selectedUser?.avatar_url ?? null : pendingAvatarBlob === null ? null : pendingAvatarPreviewUrl
+
+  const clearPendingAvatarState = () => {
+    if (pendingAvatarPreviewUrl) {
+      URL.revokeObjectURL(pendingAvatarPreviewUrl)
+    }
+    setPendingAvatarPreviewUrl(null)
+    setPendingAvatarBlob(undefined)
+  }
 
   const {
     register: registerCreate,
@@ -287,6 +417,8 @@ export default function UserManagementPage() {
       facilityIds: [],
     },
   })
+
+  const detailHasChanges = detailIsDirty || hasPendingAvatarChange
 
   const createRoleCode = watchCreate('roleCode')
   const createCountryCode = watchCreate('countryCode')
@@ -603,13 +735,6 @@ export default function UserManagementPage() {
     setSelectedUserIds(filteredIds)
   }
 
-  const summarizeAssignments = (ids: string[], labelById: Map<string, string>, fallback: string) => {
-    if (ids.length === 0) return '-'
-    const labels = ids.map((id) => labelById.get(id) ?? fallback)
-    if (labels.length <= 2) return labels.join(', ')
-    return `${labels.slice(0, 2).join(', ')} +${labels.length - 2}`
-  }
-
   const onBulkToggleUsers = async (isActive: boolean) => {
     const targets = selectedUsers.filter((row) => !(currentUser?.id === row.id && !isActive))
     if (targets.length === 0) {
@@ -753,40 +878,64 @@ export default function UserManagementPage() {
     resetDetail(nextValues)
     setDetailSnapshot(nextValues)
     setIsEditingDetails(false)
+    clearPendingAvatarState()
   }
 
   const onSaveUserDetails = async (values: DetailFormValues) => {
     if (!selectedUser) return
+    if (!detailHasChanges) return
+
     try {
-      const phone = normalizePhone(values.countryCode, values.phoneLocal)
-      await updateUserMutation.mutateAsync({
-        userId: selectedUser.id,
-        email: values.email,
-        fullName: values.fullName,
-        phone,
-        roleCode: values.roleCode,
-        roleTitle: values.roleTitle,
-        companyIds: values.roleCode === 'CLIENT' ? (values.companyIds ?? []) : [],
-        facilityIds: isScopedOpsRole(values.roleCode) ? (values.facilityIds ?? []) : [],
-      })
-      toast.success('User updated.')
-      const nextSnapshot: DetailFormValues = {
+      if (detailIsDirty) {
+        const phone = normalizePhone(values.countryCode, values.phoneLocal)
+        await updateUserMutation.mutateAsync({
+          userId: selectedUser.id,
+          email: values.email,
+          fullName: values.fullName,
+          phone,
+          roleCode: values.roleCode,
+          roleTitle: values.roleTitle,
+          companyIds: values.roleCode === 'CLIENT' ? (values.companyIds ?? []) : [],
+          facilityIds: isScopedOpsRole(values.roleCode) ? (values.facilityIds ?? []) : [],
+        })
+      }
+    } catch (error) {
+      toast.error(toHumanErrorMessage(error, 'Unable to update user profile.'))
+      return
+    }
+
+    try {
+      if (hasPendingAvatarChange) {
+        // We know pendingAvatarBlob is either Blob or null here
+        await updateUserAvatarMutation.mutateAsync({ userId: selectedUser.id, avatarBlob: pendingAvatarBlob as Blob | null })
+      }
+    } catch (error) {
+      if (toHumanErrorMessage(error, '').includes('row-level security') || toHumanErrorMessage(error, '').includes('JWT')) {
+         toast.error('Unable to update avatar: permission denied or token issue.')
+      } else {
+         toast.error(toHumanErrorMessage(error, 'Unable to update user avatar.'))
+      }
+      return
+    }
+
+    toast.success('User updated.')
+    const nextSnapshot: DetailFormValues = {
         ...values,
         companyIds: values.companyIds ?? [],
         facilityIds: values.facilityIds ?? [],
-      }
-      setDetailSnapshot(nextSnapshot)
-      resetDetail(nextSnapshot)
-      setIsEditingDetails(false)
-    } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to update user.'))
     }
+    setDetailSnapshot(nextSnapshot)
+    resetDetail(nextSnapshot)
+    setIsEditingDetails(false)
+    clearPendingAvatarState()
+    await refetch()
   }
 
   const runDiscardAction = () => {
     if (pendingDiscardAction === 'close') {
       setSelectedUser(null)
       setIsEditingDetails(false)
+      clearPendingAvatarState()
     }
 
     if (pendingDiscardAction === 'cancel-edit') {
@@ -794,6 +943,7 @@ export default function UserManagementPage() {
         resetDetail(detailSnapshot)
       }
       setIsEditingDetails(false)
+      clearPendingAvatarState()
     }
 
     setPendingDiscardAction(null)
@@ -806,13 +956,14 @@ export default function UserManagementPage() {
   }
 
   const onAttemptCloseDetails = () => {
-    if (isEditingDetails && detailIsDirty) {
+    if (isEditingDetails && detailHasChanges) {
       requestDiscardConfirmation('close')
       return
     }
 
     setSelectedUser(null)
     setIsEditingDetails(false)
+    clearPendingAvatarState()
   }
 
   const onOpenUserStatusConfirm = (row: AdminUserRow, nextIsActive: boolean) => {
@@ -849,6 +1000,297 @@ export default function UserManagementPage() {
     } catch (error) {
       toast.error(toHumanErrorMessage(error, 'Unable to reset password for this user.'))
     }
+  }
+
+  const closeAvatarEditor = () => {
+    setIsAvatarEditorOpen(false)
+    setIsAvatarEditorDiscardConfirmOpen(false)
+    setAvatarEditorSourceUrl(null)
+    setAvatarEditorImageSize(null)
+    setAvatarEditorDraft({ scale: 1, posX: 0, posY: 0 })
+    if (avatarEditorObjectUrl) {
+      URL.revokeObjectURL(avatarEditorObjectUrl)
+      setAvatarEditorObjectUrl(null)
+    }
+  }
+
+  const hasAvatarEditorChanges = (() => {
+    if (!avatarEditorImageSize) {
+      return avatarEditorDraft.scale !== 1 || Math.abs(avatarEditorDraft.posX) > 0.001 || Math.abs(avatarEditorDraft.posY) > 0.001
+    }
+
+    const initial = getInitialAvatarDraft(avatarEditorImageSize, avatarEditorViewportSize)
+    return (
+      Math.abs(avatarEditorDraft.scale - initial.scale) > 0.001 ||
+      Math.abs(avatarEditorDraft.posX - initial.posX) > 0.001 ||
+      Math.abs(avatarEditorDraft.posY - initial.posY) > 0.001
+    )
+  })()
+
+  const requestCloseAvatarEditor = () => {
+    if (hasAvatarEditorChanges) {
+      setIsAvatarEditorDiscardConfirmOpen(true)
+      return
+    }
+    closeAvatarEditor()
+  }
+
+  const clampAvatarDraft = (draft: AvatarEditorDraft, imageSize: AvatarImageSize | null) => {
+    if (!imageSize) return draft
+    return clampAvatarEditorDraft(draft, imageSize, avatarEditorViewportSize)
+  }
+
+  const openAvatarEditorWithSource = async (sourceUrl: string, objectUrlToCleanup: string | null = null) => {
+    try {
+      const image = await loadAvatarImage(sourceUrl)
+      const imageSize = { width: image.naturalWidth || image.width, height: image.naturalHeight || image.height }
+      setAvatarEditorSourceUrl(sourceUrl)
+      setAvatarEditorImageSize(imageSize)
+      setAvatarEditorDraft(getInitialAvatarDraft(imageSize, avatarEditorViewportSize))
+      setAvatarEditorValidationError(null)
+      setAvatarEditorObjectUrl(objectUrlToCleanup)
+      setIsAvatarEditorOpen(true)
+      setTimeout(() => avatarEditorViewportRef.current?.focus(), 0)
+    } catch {
+      if (objectUrlToCleanup) {
+        URL.revokeObjectURL(objectUrlToCleanup)
+      }
+      toast.error('Unable to open avatar editor.')
+    }
+  }
+
+  const onOpenCurrentAvatarEditor = () => {
+    if (!detailAvatarUrl) {
+      toast.error('No photo available to edit.')
+      return
+    }
+
+    void openAvatarEditorWithSource(detailAvatarUrl)
+  }
+
+  const onApplyAvatarEditor = async () => {
+    if (!selectedUser || !avatarEditorSourceUrl || !avatarEditorImageSize) return
+
+    try {
+      const image = await loadAvatarImage(avatarEditorSourceUrl)
+      const target = 512
+      const canvas = document.createElement('canvas')
+      canvas.width = target
+      canvas.height = target
+      const context = canvas.getContext('2d')
+
+      if (!context) {
+        throw new Error('Unable to process image.')
+      }
+
+      const exportScale = target / avatarEditorViewportSize
+      const exportDraft: AvatarEditorDraft = {
+        scale: avatarEditorDraft.scale * exportScale,
+        posX: avatarEditorDraft.posX * exportScale,
+        posY: avatarEditorDraft.posY * exportScale,
+      }
+      const metrics = getAvatarRenderMetrics(exportDraft, avatarEditorImageSize, target, avatarEditorMaxScale * exportScale)
+      context.clearRect(0, 0, target, target)
+      context.drawImage(image, metrics.left, metrics.top, metrics.drawWidth, metrics.drawHeight)
+
+      const blob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob((generatedBlob) => resolve(generatedBlob), 'image/webp', 0.82)
+      })
+
+      if (!blob) {
+        throw new Error('Failed to generate avatar image.')
+      }
+
+      if (pendingAvatarPreviewUrl) {
+        URL.revokeObjectURL(pendingAvatarPreviewUrl)
+      }
+      setPendingAvatarBlob(blob)
+      setPendingAvatarPreviewUrl(URL.createObjectURL(blob))
+      toast.success('Photo change is staged. Click Save to persist.')
+      closeAvatarEditor()
+    } catch (error) {
+      toast.error(toHumanErrorMessage(error, 'Unable to update profile photo.'))
+    }
+  }
+
+  const nudgeAvatarPan = (axis: 'x' | 'y', delta: number) => {
+    setAvatarEditorDraft((previous) =>
+      clampAvatarDraft(
+        {
+          ...previous,
+          posX: axis === 'x' ? previous.posX + delta : previous.posX,
+          posY: axis === 'y' ? previous.posY + delta : previous.posY,
+        },
+        avatarEditorImageSize,
+      ),
+    )
+  }
+
+  const nudgeAvatarZoom = (delta: number) => {
+    setAvatarEditorDraft((previous) => {
+      const newScale = previous.scale + delta
+      const viewportHalf = avatarEditorViewportSize / 2
+      return clampAvatarDraft(
+        {
+          ...previous,
+          scale: newScale,
+          posX: viewportHalf - (viewportHalf - previous.posX) * (newScale / previous.scale),
+          posY: viewportHalf - (viewportHalf - previous.posY) * (newScale / previous.scale),
+        },
+        avatarEditorImageSize,
+      )
+    })
+  }
+
+  const onAvatarEditorWheel: React.WheelEventHandler<HTMLDivElement> = (event) => {
+    event.preventDefault()
+
+    if (event.ctrlKey) {
+      // Trackpad pinch
+      nudgeAvatarZoom(event.deltaY > 0 ? -0.04 : 0.04)
+      return
+    }
+
+    const looksLikeTrackpadPan = Math.abs(event.deltaX) > 0.1 || (event.deltaMode === 0 && Math.abs(event.deltaY) < 12)
+    if (looksLikeTrackpadPan) {
+      setAvatarEditorDraft((previous) => clampAvatarDraft({ ...previous, posX: previous.posX + event.deltaX, posY: previous.posY + event.deltaY }, avatarEditorImageSize))
+      return
+    }
+
+    // Mouse wheel zoom
+    nudgeAvatarZoom(event.deltaY > 0 ? -0.05 : 0.05)
+  }
+
+  const onAvatarEditorPointerDown: React.PointerEventHandler<HTMLDivElement> = (event) => {
+    avatarEditorDragRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      posX: avatarEditorDraft.posX,
+      posY: avatarEditorDraft.posY,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const onAvatarEditorPointerMove: React.PointerEventHandler<HTMLDivElement> = (event) => {
+    if (!avatarEditorDragRef.current) return
+
+    const drag = avatarEditorDragRef.current
+    const deltaX = event.clientX - drag.startX
+    const deltaY = event.clientY - drag.startY
+
+    setAvatarEditorDraft((previous) => clampAvatarDraft({ ...previous, posX: drag.posX + deltaX, posY: drag.posY + deltaY }, avatarEditorImageSize))
+  }
+
+  const onAvatarEditorPointerUp: React.PointerEventHandler<HTMLDivElement> = (event) => {
+    avatarEditorDragRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  const onAvatarEditorTouchStart: React.TouchEventHandler<HTMLDivElement> = (event) => {
+    if (event.touches.length === 2) {
+      const touch1 = event.touches[0]
+      const touch2 = event.touches[1]
+      const dx = touch2.clientX - touch1.clientX
+      const dy = touch2.clientY - touch1.clientY
+      avatarEditorTouchRef.current = {
+        startDistance: Math.hypot(dx, dy),
+        startScale: avatarEditorDraft.scale,
+        touch1Id: touch1.identifier,
+        touch2Id: touch2.identifier,
+      }
+      return
+    }
+
+    if (event.touches.length === 1) {
+      const touch = event.touches[0]
+      avatarEditorDragRef.current = {
+        startX: touch.clientX,
+        startY: touch.clientY,
+        posX: avatarEditorDraft.posX,
+        posY: avatarEditorDraft.posY,
+      }
+    }
+  }
+
+  const onAvatarEditorTouchMove: React.TouchEventHandler<HTMLDivElement> = (event) => {
+    event.preventDefault()
+
+    if (event.touches.length === 2 && avatarEditorTouchRef.current) {
+      const touch1 = event.touches[0]
+      const touch2 = event.touches[1]
+      const dx = touch2.clientX - touch1.clientX
+      const dy = touch2.clientY - touch1.clientY
+      const currentDistance = Math.hypot(dx, dy)
+      const startDistance = avatarEditorTouchRef.current.startDistance || 1
+      const scaleRatio = currentDistance / startDistance
+      const nextScale = avatarEditorTouchRef.current.startScale * scaleRatio
+      setAvatarEditorDraft((previous) => {
+        const viewportHalf = avatarEditorViewportSize / 2
+        return clampAvatarDraft(
+          {
+            ...previous,
+            scale: nextScale,
+            posX: viewportHalf - (viewportHalf - previous.posX) * (nextScale / previous.scale),
+            posY: viewportHalf - (viewportHalf - previous.posY) * (nextScale / previous.scale),
+          },
+          avatarEditorImageSize,
+        )
+      })
+      return
+    }
+
+    if (event.touches.length === 1 && avatarEditorDragRef.current) {
+      const touch = event.touches[0]
+      const drag = avatarEditorDragRef.current
+      const deltaX = touch.clientX - drag.startX
+      const deltaY = touch.clientY - drag.startY
+      setAvatarEditorDraft((previous) => clampAvatarDraft({ ...previous, posX: drag.posX + deltaX, posY: drag.posY + deltaY }, avatarEditorImageSize))
+    }
+  }
+
+  const onAvatarEditorTouchEnd: React.TouchEventHandler<HTMLDivElement> = (event) => {
+    if (event.touches.length < 2) {
+      avatarEditorTouchRef.current = null
+    }
+
+    if (event.touches.length === 0) {
+      avatarEditorDragRef.current = null
+    }
+  }
+
+  const onSelectDetailAvatar: React.ChangeEventHandler<HTMLInputElement> = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file || !selectedUser) return
+
+    if (!isJpegFile(file)) {
+      setAvatarEditorValidationError('Only .jpg / .jpeg files are allowed.')
+      event.currentTarget.value = ''
+      return
+    }
+
+    if (file.size > 2 * 1024 * 1024) {
+      setAvatarEditorValidationError('File size must be 2MB or less.')
+      event.currentTarget.value = ''
+      return
+    }
+
+    setAvatarEditorValidationError(null)
+    const objectUrl = URL.createObjectURL(file)
+    event.currentTarget.value = ''
+    void openAvatarEditorWithSource(objectUrl, objectUrl)
+  }
+
+  const onRemoveDetailAvatar = async () => {
+    if (!selectedUser) return
+
+    if (pendingAvatarPreviewUrl) {
+      URL.revokeObjectURL(pendingAvatarPreviewUrl)
+    }
+    setPendingAvatarPreviewUrl(null)
+    setPendingAvatarBlob(null)
+    toast.success('Photo removal is staged. Click Save to persist.')
   }
 
   const onToggleUserInline = (row: AdminUserRow) => {
@@ -936,11 +1378,11 @@ export default function UserManagementPage() {
   return (
     <main className="space-y-6 p-6">
       <Card>
-        <CardHeader className="sticky top-0 z-20 border-b border-border/70 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+        <CardHeader className="sticky top-0 z-20 rounded-t-xl border-b border-border/70 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <CardTitle className="text-2xl tracking-tight">Users</CardTitle>
-              <CardDescription>Create, search, filter, sort, assign.</CardDescription>
+              <CardDescription>Manage user roles, access, and status.</CardDescription>
             </div>
             <div className="ml-auto flex items-center gap-2">
               <TooltipIconButton className="h-9 w-9" onClick={openCreateModal} tooltip="Add user" aria-label="Add user">
@@ -1097,43 +1539,37 @@ export default function UserManagementPage() {
                         />
                       </button>
                     </th>
-                    <th className="w-[180px] p-3 text-left">
+                    <th className="w-32 p-3 text-left">
                       <button type="button" onClick={() => onSort('user_id')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'user_id' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         User ID
                         {sortIcon('user_id')}
                       </button>
                     </th>
-                    <th className="w-[220px] p-3 text-left">
+                    <th className="w-[32%] p-3 text-left">
                       <button type="button" onClick={() => onSort('full_name')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'full_name' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         Name
                         {sortIcon('full_name')}
                       </button>
                     </th>
-                    <th className="w-[100px] p-3 text-left">
+                    <th className="w-20 p-3 text-left">
                       <button type="button" onClick={() => onSort('role_code')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'role_code' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         Type
                         {sortIcon('role_code')}
                       </button>
                     </th>
-                    <th className="w-[100px] p-3 text-left">
+                    <th className="w-24 p-3 text-left">
                       <button type="button" onClick={() => onSort('is_active')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'is_active' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         Status
                         {sortIcon('is_active')}
                       </button>
                     </th>
-                    <th className="w-[320px] p-3 text-left">
-                      <span className="font-medium text-muted-foreground">Account</span>
-                    </th>
-                    <th className="w-[220px] p-3 text-left">
-                      <span className="font-medium text-muted-foreground">Site</span>
-                    </th>
-                    <th className="w-[240px] p-3 text-left">
+                    <th className="w-44 p-3 text-left">
                       <button type="button" onClick={() => onSort('created_at')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'created_at' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         Created
                         {sortIcon('created_at')}
                       </button>
                     </th>
-                    <th className="w-[96px] p-3 text-left" aria-label="Actions" />
+                    <th className="w-20 p-3 text-left" aria-label="Actions" />
                   </tr>
                 </thead>
                 <tbody>
@@ -1175,11 +1611,11 @@ export default function UserManagementPage() {
                           )}
                         </div>
                       </td>
-                      <td className="p-3 text-sm">
+                      <td className="w-32 p-3 text-sm">
                         <ThemedHoverText text={row.user_id} className="block truncate" />
                       </td>
-                      <td className="p-3" title={row.full_name || 'Unnamed user'}>
-                        <span className="inline-flex items-center gap-2">
+                      <td className="w-[32%] p-3" title={row.full_name || 'Unnamed user'}>
+                        <span className="inline-flex w-full items-center gap-2">
                           {row.avatar_url ? (
                             <img src={row.avatar_url} alt={row.full_name || row.user_id} className="h-6 w-6 rounded-full border border-border object-cover" />
                           ) : (
@@ -1187,38 +1623,22 @@ export default function UserManagementPage() {
                               {(row.full_name || row.user_id).slice(0, 1).toUpperCase()}
                             </span>
                           )}
-                          <span className="truncate">{row.full_name || 'Unnamed user'}</span>
+                          <span className="min-w-0 truncate">{row.full_name || 'Unnamed user'}</span>
                           {currentUser?.id === row.id ? (
                             <span className="inline-flex rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">You</span>
                           ) : null}
                         </span>
                       </td>
-                      <td className="p-3">
+                      <td className="w-20 p-3">
                         <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${roleBadgeClass(row.role_code)}`}>
                           {row.role_code ?? '-'}
                         </span>
                       </td>
-                      <td className="p-3">{row.is_active ? 'Active' : 'Inactive'}</td>
-                      <td
-                        className="p-3 text-muted-foreground"
-                      >
-                        <ThemedHoverText
-                          text={(derivedAccountIdsByUserId.get(row.id) ?? []).map((id) => companyById.get(id) ?? 'Unknown account').join(', ') || '-'}
-                          className="block truncate"
-                        />
-                      </td>
-                      <td
-                        className="p-3 text-muted-foreground"
-                      >
-                        <ThemedHoverText
-                          text={(derivedFacilityIdsByUserId.get(row.id) ?? []).map((id) => facilityById.get(id) ?? 'Unknown site').join(', ') || '-'}
-                          className="block truncate"
-                        />
-                      </td>
-                      <td className="p-3 text-muted-foreground">
+                      <td className="w-24 p-3">{row.is_active ? 'Active' : 'Inactive'}</td>
+                      <td className="w-44 p-3 text-muted-foreground">
                         <ThemedHoverText text={new Date(row.created_at).toLocaleString()} className="block truncate" />
                       </td>
-                      <td className="p-3">
+                      <td className="w-20 p-3">
                         <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
                           <TooltipIconButton
                             onClick={(event) => {
@@ -1351,10 +1771,12 @@ export default function UserManagementPage() {
                   </div>
                 ) : (
                   <div className="grid gap-4 md:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label htmlFor="create-roleTitle">Role Title</Label>
-                      <Input id="create-roleTitle" placeholder={roleTitleByCode[createRoleCode]} {...registerCreate('roleTitle')} />
-                    </div>
+                    {createRoleCode !== 'CLIENT' ? (
+                      <div className="space-y-2">
+                        <Label htmlFor="create-roleTitle">Role Title</Label>
+                        <Input id="create-roleTitle" placeholder={roleTitleByCode[createRoleCode]} {...registerCreate('roleTitle')} />
+                      </div>
+                    ) : null}
                     {!createRoleIsGlobal ? (
                       <>
                         {createRoleCode === 'CLIENT' ? (
@@ -1395,38 +1817,60 @@ export default function UserManagementPage() {
                         ) : null}
 
                         {createCanAssignSites ? (
-                        <div className="space-y-2 md:col-span-2">
-                          <Label htmlFor="create-facilityIds">Sites</Label>
-                          <div className="w-full">
-                            <SearchableSelect
-                              value=""
-                              values={watchCreate('facilityIds') ?? []}
-                              onChange={() => undefined}
-                              onValuesChange={(next) => setCreateValue('facilityIds', next, { shouldDirty: true })}
-                              options={createSiteSelectOptions}
-                              placeholder=""
-                              searchPlaceholder="Search site"
-                              multiSelect
-                              wrapOptions
-                            />
+                        <div className="space-y-4 md:col-span-2">
+                          <div className="space-y-2">
+                            <Label htmlFor="create-facilityIds">Sites</Label>
+                            <div className="w-full">
+                              <SearchableSelect
+                                value=""
+                                values={watchCreate('facilityIds') ?? []}
+                                onChange={() => undefined}
+                                onValuesChange={(next) => setCreateValue('facilityIds', next, { shouldDirty: true })}
+                                options={createSiteSelectOptions}
+                                placeholder=""
+                                searchPlaceholder="Search site"
+                                multiSelect
+                                wrapOptions
+                              />
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {(watchCreate('facilityIds') ?? []).length > 0 ? (
+                                (watchCreate('facilityIds') ?? []).map((id) => (
+                                  <span key={id} className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/30 px-2 py-1 text-xs">
+                                    {facilityById.get(id) ?? id}
+                                    <button
+                                      type="button"
+                                      onClick={() => setCreateValue('facilityIds', removeOne(watchCreate('facilityIds') ?? [], id), { shouldDirty: true })}
+                                      aria-label="Remove site"
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </span>
+                                ))
+                              ) : (
+                                <p className="text-xs text-muted-foreground">No site assigned.</p>
+                              )}
+                            </div>
                           </div>
-                          <div className="flex flex-wrap gap-2">
-                            {(watchCreate('facilityIds') ?? []).length > 0 ? (
-                              (watchCreate('facilityIds') ?? []).map((id) => (
-                                <span key={id} className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/30 px-2 py-1 text-xs">
-                                  {facilityById.get(id) ?? id}
-                                  <button
-                                    type="button"
-                                    onClick={() => setCreateValue('facilityIds', removeOne(watchCreate('facilityIds') ?? [], id), { shouldDirty: true })}
-                                    aria-label="Remove site"
-                                  >
-                                    <X className="h-3 w-3" />
-                                  </button>
-                                </span>
-                              ))
-                            ) : (
-                              <p className="text-xs text-muted-foreground">No site assigned.</p>
-                            )}
+                          <div className="space-y-2">
+                            <Label>Accounts</Label>
+                            <div className="flex flex-wrap gap-2">
+                              {(() => {
+                                const facIds = watchCreate('facilityIds') ?? []
+                                const companies = new Set<string>()
+                                facIds.forEach(id => {
+                                  const cId = companyIdByFacilityId.get(id)
+                                  if (cId) companies.add(cId)
+                                })
+                                if (companies.size === 0) return <p className="text-xs text-muted-foreground">No account derived from sites.</p>
+                                return Array.from(companies).map(cId => (
+                                  <span key={cId} className="inline-flex items-center rounded-full border border-border/70 bg-muted/30 px-2 py-1 text-xs">
+                                    {companyById.get(cId) ?? cId}
+                                  </span>
+                                ))
+                              })()}
+                            </div>
+                            <p className="text-xs text-muted-foreground">Accounts are automatically derived from selected sites.</p>
                           </div>
                         </div>
                         ) : null}
@@ -1459,29 +1903,9 @@ export default function UserManagementPage() {
               <div className="flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-lg font-semibold">User Details</h2>
-                <p className="text-sm text-muted-foreground">View metadata and update editable fields.</p>
+                <p className="text-sm text-muted-foreground">View user metadata.</p>
               </div>
               <div className="flex items-center gap-2">
-                {isEditingDetails ? (
-                  <Button
-                    variant="outline"
-                    className="h-9 px-3"
-                    type="button"
-                    onClick={() => {
-                      if (detailIsDirty) {
-                        requestDiscardConfirmation('cancel-edit')
-                        return
-                      }
-                      setIsEditingDetails(false)
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                ) : (
-                  <TooltipIconButton className="h-8 w-8" type="button" onClick={() => setIsEditingDetails(true)} tooltip="Edit user details" aria-label="Edit user details">
-                    <Pencil className="h-4 w-4" />
-                  </TooltipIconButton>
-                )}
                 <Button variant="outline" size="icon" className="h-8 w-8" onClick={onAttemptCloseDetails} aria-label="Close">
                   <X className="h-4 w-4" />
                 </Button>
@@ -1493,37 +1917,106 @@ export default function UserManagementPage() {
             <div className="mb-6 grid gap-3 rounded-md border border-border/70 bg-muted/30 p-4 text-sm">
               <div><span className="text-muted-foreground">User ID:</span> <span className="font-medium">{selectedUser.user_id}</span></div>
               <div><span className="text-muted-foreground">Created At:</span> {new Date(selectedUser.created_at).toLocaleString()}</div>
+              <div><span className="text-muted-foreground">Updated At:</span> {selectedUser.updated_at ? new Date(selectedUser.updated_at).toLocaleString() : '-'}</div>
               <div><span className="text-muted-foreground">Status:</span> {selectedUser.is_active ? 'Active' : 'Inactive'}</div>
-              <div>
-                <span className="text-muted-foreground">Accounts:</span>{' '}
-                {summarizeAssignments(derivedAccountIdsByUserId.get(selectedUser.id) ?? [], companyById, 'Unknown account')}
-              </div>
-              <div>
-                <span className="text-muted-foreground">Sites:</span>{' '}
-                {summarizeAssignments(derivedFacilityIdsByUserId.get(selectedUser.id) ?? [], facilityById, 'Unknown site')}
-              </div>
             </div>
-            <div className="mb-6 rounded-md border border-border/70 p-4">
-              <p className="mb-3 text-sm font-medium">Profile Photo</p>
-              <div className="flex flex-wrap items-center gap-4">
-                {selectedUser.avatar_url ? (
-                  <img src={selectedUser.avatar_url} alt={selectedUser.full_name || selectedUser.user_id} className="h-14 w-14 rounded-full border border-border object-cover" />
-                ) : (
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full border border-border bg-muted text-base font-semibold">
-                    {(selectedUser.full_name || selectedUser.user_id).slice(0, 1).toUpperCase()}
-                  </div>
-                )}
+            <form className="mb-6 space-y-4 rounded-md border border-border/70 p-4" onSubmit={handleDetailSubmit(onSaveUserDetails)}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium">Editable Details</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {isEditingDetails ? (
+                    <>
+                      <Button
+                        variant="outline"
+                        className="h-9 px-3"
+                        type="button"
+                        onClick={() => {
+                          if (detailHasChanges) {
+                            requestDiscardConfirmation('cancel-edit')
+                            return
+                          }
+                          setIsEditingDetails(false)
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button type="submit" className="h-9 px-3" disabled={!detailHasChanges || updateUserMutation.isPending || updateUserAvatarMutation.isPending}>
+                        {updateUserMutation.isPending || updateUserAvatarMutation.isPending ? 'Saving...' : 'Save'}
+                      </Button>
+                    </>
+                  ) : (
+                    <TooltipIconButton className="h-8 w-8" type="button" onClick={() => setIsEditingDetails(true)} tooltip="Edit user details" aria-label="Edit user details">
+                      <Pencil className="h-4 w-4" />
+                    </TooltipIconButton>
+                  )}
+                </div>
+              </div>
 
-                {isSelfSelected ? (
-                  <Button type="button" variant="outline" className="h-9 px-3" onClick={() => navigate('/settings')}>
-                    Manage
-                  </Button>
-                ) : (
-                  <p className="text-xs text-muted-foreground">Only this user can change their photo in their own profile settings.</p>
-                )}
+              <div className="flex items-center justify-between gap-4 rounded-md border border-border/70 bg-muted/10 p-3">
+                <div className="flex items-center gap-3">
+                  {detailAvatarUrl ? (
+                    <img src={detailAvatarUrl} alt={selectedUser.full_name || selectedUser.user_id} className="h-14 w-14 rounded-full border border-border object-cover" />
+                  ) : (
+                    <div className="flex h-14 w-14 items-center justify-center rounded-full border border-border bg-muted text-base font-semibold">
+                      {(selectedUser.full_name || selectedUser.user_id).slice(0, 1).toUpperCase()}
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-sm font-medium">Profile Photo</p>
+                  </div>
+                </div>
+
+                <input
+                  ref={detailAvatarInputRef}
+                  type="file"
+                  accept=".jpg,.jpeg,image/jpeg"
+                  className="hidden"
+                  onChange={(event) => {
+                    void onSelectDetailAvatar(event)
+                  }}
+                />
+
+                {isEditingDetails ? (
+                  <div className="flex items-center gap-1">
+                    <TooltipIconButton
+                      type="button"
+                      className="h-8 w-8"
+                      onClick={() => detailAvatarInputRef.current?.click()}
+                      tooltip={detailAvatarUrl ? 'Replace photo' : 'Upload photo'}
+                      aria-label={detailAvatarUrl ? 'Replace photo' : 'Upload photo'}
+                      disabled={updateUserAvatarMutation.isPending}
+                    >
+                      <Upload className="h-4 w-4" />
+                    </TooltipIconButton>
+                    <TooltipIconButton
+                      type="button"
+                      className="h-8 w-8"
+                      onClick={onOpenCurrentAvatarEditor}
+                      tooltip="Edit / modify photo"
+                      aria-label="Edit / modify photo"
+                      disabled={!detailAvatarUrl || updateUserAvatarMutation.isPending}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </TooltipIconButton>
+                    <TooltipIconButton
+                      type="button"
+                      className="h-8 w-8"
+                      onClick={() => {
+                        void onRemoveDetailAvatar()
+                      }}
+                      tooltip="Remove photo"
+                      aria-label="Remove photo"
+                      disabled={!detailAvatarUrl || updateUserAvatarMutation.isPending}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </TooltipIconButton>
+                  </div>
+                ) : null}
               </div>
-            </div>
-            <form className="space-y-4" onSubmit={handleDetailSubmit(onSaveUserDetails)}>
+              {avatarEditorValidationError ? <p className="text-xs text-destructive">{avatarEditorValidationError}</p> : null}
+
               <div className="space-y-2">
                 <Label htmlFor="detail-fullName">Full Name<RequiredMark /></Label>
                 <Input id="detail-fullName" className={detailReadOnlyClass} readOnly={!isEditingDetails} {...registerDetail('fullName')} />
@@ -1582,12 +2075,14 @@ export default function UserManagementPage() {
                   />
                   {oldValueHint('roleCode')}
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="detail-roleTitle">Role Title<RequiredMark /></Label>
-                  <Input id="detail-roleTitle" className={detailReadOnlyClass} readOnly={!isEditingDetails} {...registerDetail('roleTitle')} />
-                  {oldValueHint('roleTitle')}
-                  {detailErrors.roleTitle ? <p className="text-xs text-destructive">{detailErrors.roleTitle.message}</p> : null}
-                </div>
+                {detailRoleCode !== 'CLIENT' ? (
+                  <div className="space-y-2">
+                    <Label htmlFor="detail-roleTitle">Role Title<RequiredMark /></Label>
+                    <Input id="detail-roleTitle" className={detailReadOnlyClass} readOnly={!isEditingDetails} {...registerDetail('roleTitle')} />
+                    {oldValueHint('roleTitle')}
+                    {detailErrors.roleTitle ? <p className="text-xs text-destructive">{detailErrors.roleTitle.message}</p> : null}
+                  </div>
+                ) : null}
               </div>
               {!detailRoleIsGlobal ? (
                 <div className="space-y-4">
@@ -1637,56 +2132,76 @@ export default function UserManagementPage() {
                   ) : null}
 
                   {detailCanAssignSites ? (
-                  <div className="space-y-2">
-                    <Label htmlFor="detail-facilityIds">Sites</Label>
-                    <div className="w-full">
-                      <SearchableSelect
-                        value=""
-                        values={detailFacilityIds ?? []}
-                        onChange={() => undefined}
-                        onValuesChange={(next) => {
-                          if (!isEditingDetails) return
-                          setDetailValue('facilityIds', next, { shouldDirty: true })
-                        }}
-                        options={detailSiteSelectOptions}
-                        className={detailReadOnlyClass}
-                        placeholder=""
-                        searchPlaceholder="Search site"
-                        disabled={!isEditingDetails}
-                        multiSelect
-                        wrapOptions
-                      />
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="detail-facilityIds">Sites</Label>
+                        <div className="w-full">
+                          <SearchableSelect
+                            value=""
+                            values={detailFacilityIds ?? []}
+                            onChange={() => undefined}
+                            onValuesChange={(next) => {
+                              if (!isEditingDetails) return
+                              setDetailValue('facilityIds', next, { shouldDirty: true })
+                            }}
+                            options={detailSiteSelectOptions}
+                            className={detailReadOnlyClass}
+                            placeholder=""
+                            searchPlaceholder="Search site"
+                            disabled={!isEditingDetails}
+                            multiSelect
+                            wrapOptions
+                          />
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {(detailFacilityIds ?? []).length > 0 ? (
+                            (detailFacilityIds ?? []).map((id) => (
+                              <span key={id} className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/30 px-2 py-1 text-xs">
+                                {facilityById.get(id) ?? id}
+                                {isEditingDetails ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setDetailValue('facilityIds', removeOne(detailFacilityIds ?? [], id), { shouldDirty: true })}
+                                    aria-label="Remove site"
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                ) : null}
+                              </span>
+                            ))
+                          ) : (
+                            <p className="text-xs text-muted-foreground">No site assigned.</p>
+                          )}
+                        </div>
+                        {oldValueHint('facilityIds')}
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Accounts</Label>
+                        <div className="flex flex-wrap gap-2">
+                          {(() => {
+                            const derivedCompanyIds = Array.from(
+                              new Set(
+                                (detailFacilityIds ?? [])
+                                  .map((fId) => detailFacilityOptions.find((opt) => opt.id === fId)?.companyId)
+                                  .filter(Boolean) as string[]
+                              )
+                            )
+                            if (derivedCompanyIds.length === 0) {
+                              return <p className="text-xs text-muted-foreground">Accounts mapped based on site selection.</p>
+                            }
+                            return derivedCompanyIds.map((cId) => (
+                              <span key={cId} className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/30 px-2 py-1 text-xs">
+                                {companyById.get(cId) ?? cId}
+                              </span>
+                            ))
+                          })()}
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      {(detailFacilityIds ?? []).length > 0 ? (
-                        (detailFacilityIds ?? []).map((id) => (
-                          <span key={id} className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/30 px-2 py-1 text-xs">
-                            {facilityById.get(id) ?? id}
-                            {isEditingDetails ? (
-                              <button
-                                type="button"
-                                onClick={() => setDetailValue('facilityIds', removeOne(detailFacilityIds ?? [], id), { shouldDirty: true })}
-                                aria-label="Remove site"
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            ) : null}
-                          </span>
-                        ))
-                      ) : (
-                        <p className="text-xs text-muted-foreground">No site assigned.</p>
-                      )}
-                    </div>
-                    {oldValueHint('facilityIds')}
-                  </div>
                   ) : null}
                 </div>
               ) : null}
-              <div className="flex justify-end">
-                <Button type="submit" className="h-9 px-3" disabled={!isEditingDetails || !detailIsDirty || updateUserMutation.isPending}>
-                  {updateUserMutation.isPending ? 'Saving...' : 'Save'}
-                </Button>
-              </div>
             </form>
             {!isSelfSelected ? (
               <div className="mt-8 space-y-3 rounded-md border border-destructive/30 bg-destructive/5 p-4">
@@ -1729,6 +2244,123 @@ export default function UserManagementPage() {
                 Self actions are hidden.
               </div>
             )}
+
+            {isAvatarEditorOpen && avatarEditorSourceUrl ? (
+              <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4" onClick={requestCloseAvatarEditor}>
+                <Card className="w-full max-w-xl" onClick={(event) => event.stopPropagation()}>
+                  <CardHeader>
+                    <CardTitle className="text-base">Adjust Photo</CardTitle>
+                    <CardDescription>Drag to move. Trackpad two-finger scroll pans, pinch zooms.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div
+                      ref={avatarEditorViewportRef}
+                      tabIndex={0}
+                      className="relative mx-auto h-80 w-80 cursor-grab overflow-hidden rounded-full border border-border bg-muted/40 outline-none active:cursor-grabbing"
+                      onWheel={onAvatarEditorWheel}
+                      onPointerDown={onAvatarEditorPointerDown}
+                      onPointerMove={onAvatarEditorPointerMove}
+                      onPointerUp={onAvatarEditorPointerUp}
+                      onPointerCancel={onAvatarEditorPointerUp}
+                      onTouchStart={onAvatarEditorTouchStart}
+                      onTouchMove={onAvatarEditorTouchMove}
+                      onTouchEnd={onAvatarEditorTouchEnd}
+                    >
+                      {avatarEditorMetrics ? (
+                        <img
+                          src={avatarEditorSourceUrl}
+                          alt={selectedUser.full_name || selectedUser.user_id}
+                          className="pointer-events-none absolute select-none max-w-none"
+                          draggable={false}
+                          style={{
+                            width: `${avatarEditorMetrics.drawWidth}px`,
+                            height: `${avatarEditorMetrics.drawHeight}px`,
+                            left: `${avatarEditorMetrics.left}px`,
+                            top: `${avatarEditorMetrics.top}px`,
+                          }}
+                        />
+                      ) : null}
+                    </div>
+
+                    <div className="flex items-center justify-between rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                      <span>
+                        Zoom {avatarEditorMetrics ? Math.round((avatarEditorDraft.scale / avatarEditorMetrics.minScale) * 100) : 100}%
+                      </span>
+                      <span>Photo stays within frame bounds</span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <TooltipIconButton type="button" className="h-8 w-8" onClick={() => nudgeAvatarZoom(0.08)} tooltip="Zoom in" aria-label="Zoom in">
+                        <Plus className="h-4 w-4" />
+                      </TooltipIconButton>
+                      <TooltipIconButton type="button" className="h-8 w-8" onClick={() => nudgeAvatarZoom(-0.08)} tooltip="Zoom out" aria-label="Zoom out">
+                        <Minus className="h-4 w-4" />
+                      </TooltipIconButton>
+                      <TooltipIconButton type="button" className="h-8 w-8" onClick={() => nudgeAvatarPan('x', -8)} tooltip="Move left" aria-label="Move left">
+                        <ArrowLeft className="h-4 w-4" />
+                      </TooltipIconButton>
+                      <TooltipIconButton type="button" className="h-8 w-8" onClick={() => nudgeAvatarPan('x', 8)} tooltip="Move right" aria-label="Move right">
+                        <ArrowRight className="h-4 w-4" />
+                      </TooltipIconButton>
+                      <TooltipIconButton type="button" className="h-8 w-8" onClick={() => nudgeAvatarPan('y', -8)} tooltip="Move up" aria-label="Move up">
+                        <ArrowUp className="h-4 w-4" />
+                      </TooltipIconButton>
+                      <TooltipIconButton type="button" className="h-8 w-8" onClick={() => nudgeAvatarPan('y', 8)} tooltip="Move down" aria-label="Move down">
+                        <ArrowDown className="h-4 w-4" />
+                      </TooltipIconButton>
+                      <TooltipIconButton
+                        type="button"
+                        className="h-8 w-8"
+                        onClick={() => {
+                          if (!avatarEditorImageSize) return
+                          setAvatarEditorDraft(getInitialAvatarDraft(avatarEditorImageSize, avatarEditorViewportSize))
+                        }}
+                        tooltip="Reset position"
+                        aria-label="Reset position"
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                      </TooltipIconButton>
+                    </div>
+
+                    <div className="flex justify-end gap-2">
+                      <Button type="button" variant="outline" className="h-9 px-3" onClick={requestCloseAvatarEditor}>
+                        Cancel
+                      </Button>
+                      <Button type="button" className="h-9 px-3" onClick={() => void onApplyAvatarEditor()} disabled={updateUserAvatarMutation.isPending}>
+                        {updateUserAvatarMutation.isPending ? 'Applying...' : 'Apply'}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            ) : null}
+
+            {isAvatarEditorDiscardConfirmOpen ? (
+              <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 p-4" onClick={() => setIsAvatarEditorDiscardConfirmOpen(false)}>
+                <Card className="w-full max-w-md" onClick={(event) => event.stopPropagation()}>
+                  <CardHeader>
+                    <CardTitle className="text-base">Discard and close?</CardTitle>
+                    <CardDescription>You have unsaved changes. Discard and close?</CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex justify-end gap-2">
+                    <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setIsAvatarEditorDiscardConfirmOpen(false)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      className="h-9 px-3"
+                      onClick={() => {
+                        setIsAvatarEditorDiscardConfirmOpen(false)
+                        closeAvatarEditor()
+                      }}
+                    >
+                      Confirm
+                    </Button>
+                  </CardContent>
+                </Card>
+              </div>
+            ) : null}
 
             {isDiscardConfirmOpen ? (
               <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={() => setIsDiscardConfirmOpen(false)}>

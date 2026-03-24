@@ -105,7 +105,18 @@ Deno.serve(async (request) => {
     return jsonResponse(500, { error: targetProfileError.message })
   }
 
-  const phone = (targetProfile?.phone ?? '').trim()
+  let phone = (targetProfile?.phone ?? '').trim()
+
+  if (!phone) {
+    const { data: targetUserData, error: targetUserError } = await adminClient.auth.admin.getUserById(targetUserId)
+    if (targetUserError) {
+      return jsonResponse(500, { error: targetUserError.message })
+    }
+
+    const rawMeta = (targetUserData.user?.user_metadata ?? {}) as { phone?: string }
+    phone = (rawMeta.phone ?? '').trim()
+  }
+
   if (!phone) {
     return jsonResponse(400, { error: 'Target user has no phone number configured.' })
   }
@@ -116,6 +127,15 @@ Deno.serve(async (request) => {
 
   if (resetError) {
     return jsonResponse(400, { error: resetError.message })
+  }
+
+  const { error: deleteActiveSessionsError } = await adminClient
+    .from('active_sessions')
+    .delete()
+    .eq('user_id', targetUserId)
+
+  if (deleteActiveSessionsError) {
+    return jsonResponse(500, { error: deleteActiveSessionsError.message })
   }
 
   return jsonResponse(200, {

@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowDown, ArrowDownUp, ArrowUp, Eye, Pencil, Plus, Power, Search, Trash2, Upload, UserPlus, X } from 'lucide-react'
+import { ArrowDown, ArrowDownUp, ArrowUp, Eye, Pencil, Plus, Power, PowerOff, Search, Trash2, Upload, UserMinus, UserPlus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -15,7 +15,7 @@ import { TooltipIconButton } from '@/components/ui/tooltip-icon-button'
 import { useCompanyOptions, useFacilityOptions } from '@/hooks/useAdminAccess'
 import { useAdminUsers } from '@/hooks/useAdminUsers'
 import {
-  type AdminFacilityWithUserStats,
+  type AdminFacilityRow,
   useAdminCompanyDetails,
   useCreateFacility,
   useGrantCompanyClientAccess,
@@ -32,7 +32,6 @@ import { toHumanErrorMessage } from '@/lib/errors'
 
 const companySchema = z.object({
   companyName: z.string().min(2, 'Company name is required.'),
-  billingAddress: z.string().min(5, 'Billing address is required.'),
 })
 
 const facilitySchema = z.object({
@@ -46,7 +45,7 @@ const facilitySchema = z.object({
 type CompanyFormValues = z.infer<typeof companySchema>
 type FacilityFormValues = z.infer<typeof facilitySchema>
 
-type FacilitySortKey = 'facility_code' | 'facility_name' | 'city' | 'total_user_count' | 'created_at'
+type FacilitySortKey = 'facility_code' | 'facility_name' | 'city' | 'created_at' | 'updated_at'
 type SortDirection = 'asc' | 'desc'
 
 function sortIcon(active: boolean, direction: SortDirection) {
@@ -94,10 +93,10 @@ export default function ClientDetailsPage() {
 
   const [isFacilityModalOpen, setIsFacilityModalOpen] = useState(false)
   const [isEditCompanySidebarOpen, setIsEditCompanySidebarOpen] = useState(false)
-  const [editingFacility, setEditingFacility] = useState<AdminFacilityWithUserStats | null>(null)
+  const [editingFacility, setEditingFacility] = useState<AdminFacilityRow | null>(null)
   const [isDeleteFacilityConfirmOpen, setIsDeleteFacilityConfirmOpen] = useState(false)
   const [deleteFacilityConfirmInput, setDeleteFacilityConfirmInput] = useState('')
-  const [deleteTargetFacility, setDeleteTargetFacility] = useState<AdminFacilityWithUserStats | null>(null)
+  const [deleteTargetFacility, setDeleteTargetFacility] = useState<AdminFacilityRow | null>(null)
   const [isDeleteCompanyConfirmOpen, setIsDeleteCompanyConfirmOpen] = useState(false)
   const [deleteCompanyConfirmInput, setDeleteCompanyConfirmInput] = useState('')
   const [isAddClientUsersOpen, setIsAddClientUsersOpen] = useState(false)
@@ -118,7 +117,6 @@ export default function ClientDetailsPage() {
     resolver: zodResolver(companySchema),
     defaultValues: {
       companyName: '',
-      billingAddress: '',
     },
   })
 
@@ -150,12 +148,8 @@ export default function ClientDetailsPage() {
 
     rows.sort((a, b) => {
       const direction = facilitySortDirection === 'asc' ? 1 : -1
-      if (facilitySortKey === 'created_at') {
-        return (new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) * direction
-      }
-
-      if (facilitySortKey === 'total_user_count') {
-        return (a.total_user_count - b.total_user_count) * direction
+      if (facilitySortKey === 'created_at' || facilitySortKey === 'updated_at') {
+        return (new Date(a[facilitySortKey]).getTime() - new Date(b[facilitySortKey]).getTime()) * direction
       }
 
       return `${a[facilitySortKey] ?? ''}`.localeCompare(`${b[facilitySortKey] ?? ''}`) * direction
@@ -204,7 +198,7 @@ export default function ClientDetailsPage() {
     setLastSelectedFacilityIndex(rowIndex)
   }
 
-  const openFacilityModal = (facility?: AdminFacilityWithUserStats) => {
+  const openFacilityModal = (facility?: AdminFacilityRow) => {
     if (facility) {
       setEditingFacility(facility)
       resetFacility({
@@ -279,7 +273,6 @@ export default function ClientDetailsPage() {
       await updateCompanyMutation.mutateAsync({
         companyId: data.company.id,
         companyName: values.companyName,
-        billingAddress: values.billingAddress,
       })
       toast.success('Account updated.')
       resetCompany(values)
@@ -306,13 +299,13 @@ export default function ClientDetailsPage() {
     }
   }
 
-  const openDeleteFacilityConfirm = (facility: AdminFacilityWithUserStats) => {
+  const openDeleteFacilityConfirm = (facility: AdminFacilityRow) => {
     setDeleteTargetFacility(facility)
     setDeleteFacilityConfirmInput('')
     setIsDeleteFacilityConfirmOpen(true)
   }
 
-  const onToggleFacility = async (facility: AdminFacilityWithUserStats) => {
+  const onToggleFacility = async (facility: AdminFacilityRow) => {
     try {
       await toggleFacilityMutation.mutateAsync({ facilityId: facility.id, isActive: !facility.is_active })
       toast.success(!facility.is_active ? 'Site enabled.' : 'Site disabled.')
@@ -395,7 +388,6 @@ export default function ClientDetailsPage() {
 
     resetCompany({
       companyName: data.company.company_name,
-      billingAddress: data.company.billing_address,
     })
     setIsEditCompanySidebarOpen(false)
   }, [data, resetCompany])
@@ -435,7 +427,6 @@ export default function ClientDetailsPage() {
     const query = clientUserSearch.trim().toLowerCase()
 
     return users.filter((user) => {
-      if (!user.is_active) return false
       if (user.role_code !== 'CLIENT') return false
       if (clientAccessUserIds.has(user.id)) return false
       if (clientUserCompanyFilter !== 'ALL' && user.company_id !== clientUserCompanyFilter) return false
@@ -478,10 +469,11 @@ export default function ClientDetailsPage() {
     return user.user_id
   }
 
-  const getClientDisplayEmail = (user: { user_id: string; email: string }) => {
+  const getClientDisplayUserId = (user: { user_id: string; employee_id: string }) => {
     const linkedUser = userById.get(user.user_id)
-    if (user.email && user.email !== '-') return user.email
-    return linkedUser?.email ?? '-'
+    if (linkedUser?.user_id) return linkedUser.user_id
+    if (user.employee_id && user.employee_id !== '-') return user.employee_id
+    return user.user_id
   }
 
   const totalClientUserPages = Math.max(1, Math.ceil(candidateClientUsers.length / clientUserPageSize))
@@ -503,138 +495,144 @@ export default function ClientDetailsPage() {
   return (
     <main className="space-y-6 p-6">
       <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        <CardHeader className="sticky top-0 z-20 rounded-t-xl border-b border-border/70 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+          <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <CardTitle>Account Details</CardTitle>
+              <CardTitle className="text-2xl tracking-tight">Account Details</CardTitle>
               <CardDescription>
-                {data ? `${data.company.company_name} - metadata, users, access sharing, and sites` : 'Loading account details'}
+                {data
+                  ? `${data.company.company_name} — Users and sites.`
+                  : 'Loading account details'}
               </CardDescription>
             </div>
-            <Button type="button" variant="outline" className="h-9 px-3" onClick={() => navigate(backTarget)}>
-              Back
-            </Button>
+            <TooltipIconButton className="ml-auto h-9 w-9" tooltip="Close" onClick={() => navigate(backTarget)} aria-label="Go back">
+              <X className="h-4 w-4" />
+            </TooltipIconButton>
           </div>
         </CardHeader>
 
-        <CardContent className="space-y-6">
+        <CardContent className="space-y-6 pt-4">
           {isLoading ? (
             <p className="text-sm text-muted-foreground">Loading...</p>
           ) : data ? (
             <>
-              <div className="grid gap-3 rounded-md border border-border/70 bg-muted/20 p-4 md:grid-cols-3">
-                <div>
-                  <p className="text-xs text-muted-foreground">Account ID</p>
-                  <p className="text-sm font-medium">{data.company.company_code}</p>
+              <div className="flex flex-col gap-4 rounded-xl border border-border/70 bg-card p-5 md:flex-row md:items-start md:gap-6 shadow-sm">
+                <div className="flex-shrink-0 mt-1">
+                  {data.company.logo_url ? (
+                    <img src={data.company.logo_url} alt={data.company.company_name} className="h-20 w-20 rounded-xl border border-border/50 object-cover shadow-sm" />
+                  ) : (
+                    <div className="flex h-20 w-20 items-center justify-center rounded-xl border border-border/50 bg-muted/50 text-2xl font-semibold shadow-sm text-muted-foreground">
+                      {data.company.company_name.slice(0, 1).toUpperCase()}
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Created</p>
-                  <p className="text-sm">{new Date(data.company.created_at).toLocaleString()}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Status</p>
-                  <p className="text-sm">{data.company.is_active ? 'Active' : 'Inactive'}</p>
+                
+                <div className="flex-1 space-y-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h2 className="text-xl font-semibold tracking-tight">{data.company.company_name}</h2>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+                        <span className="inline-flex items-center gap-1.5">
+                          ID: <span className="font-medium text-foreground">{data.company.company_code}</span>
+                        </span>
+                        <span>•</span>
+                        <span className="inline-flex items-center gap-1.5">
+                          Status: <span className="font-medium text-foreground">{data.company.is_active ? 'Active' : 'Inactive'}</span>
+                        </span>
+                        <span>•</span>
+                        <span className="inline-flex items-center gap-1.5">
+                          Created: <span className="font-medium text-foreground">{new Date(data.company.created_at).toLocaleDateString()}</span>
+                        </span>
+                        <span>•</span>
+                        <span className="inline-flex items-center gap-1.5">
+                          Updated: <span className="font-medium text-foreground">{new Date(data.company.updated_at).toLocaleDateString()}</span>
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-1 text-muted-foreground">
+                      <TooltipIconButton tooltip="Edit Details" onClick={() => setIsEditCompanySidebarOpen(true)}>
+                        <Pencil className="h-4 w-4" />
+                      </TooltipIconButton>
+                      <TooltipIconButton 
+                        tooltip={data.company.is_active ? 'Deactivate' : 'Activate'} 
+                        onClick={() => void onToggleCompany()}
+                        disabled={toggleCompanyMutation.isPending}
+                        className={data.company.is_active ? 'hover:text-destructive hover:bg-destructive/10' : ''}
+                      >
+                        <PowerOff className="h-4 w-4" />
+                      </TooltipIconButton>
+                      <TooltipIconButton 
+                        tooltip="Delete Permanently" 
+                        onClick={() => { setDeleteCompanyConfirmInput(''); setIsDeleteCompanyConfirmOpen(true) }}
+                        className="hover:text-destructive hover:bg-destructive/10"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </TooltipIconButton>
+                    </div>
+                  </div>
+                  
                 </div>
               </div>
 
-              <section className="grid gap-4 rounded-md border border-border/70 p-4 md:grid-cols-2">
-                <div className="md:col-span-2 flex items-center justify-between">
-                  <p className="text-xs text-muted-foreground">Account metadata</p>
-                  <TooltipIconButton className="h-8 w-8" tooltip="Edit account metadata" onClick={() => setIsEditCompanySidebarOpen(true)}>
-                    <Pencil className="h-4 w-4" />
-                  </TooltipIconButton>
-                </div>
-                <div className="space-y-2">
-                  <p className="text-xs text-muted-foreground">Name</p>
-                  <p className="rounded-md border border-border/70 bg-muted/10 px-3 py-2 text-sm">{data.company.company_name}</p>
-                </div>
-                <div className="space-y-2">
-                  <p className="text-xs text-muted-foreground">Billing Address</p>
-                  <p className="rounded-md border border-border/70 bg-muted/10 px-3 py-2 text-sm">{data.company.billing_address}</p>
-                </div>
-                <div className="space-y-2 md:col-span-2 rounded-md border border-border/70 bg-muted/20 p-3">
-                  <p className="text-xs text-muted-foreground">Account Logo</p>
-                  <div className="flex flex-wrap items-center gap-3">
-                    {data.company.logo_url ? (
-                      <img src={data.company.logo_url} alt={data.company.company_name} className="h-12 w-12 rounded-full border border-border object-cover" />
-                    ) : (
-                      <div className="flex h-12 w-12 items-center justify-center rounded-full border border-border bg-muted text-sm font-semibold">
-                        {data.company.company_name.slice(0, 1).toUpperCase()}
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <div className="md:col-span-2 flex flex-wrap justify-end gap-2">
-                  <Button type="button" variant={data.company.is_active ? 'destructive' : 'secondary'} className="h-9 px-3" onClick={() => void onToggleCompany()} disabled={toggleCompanyMutation.isPending}>
-                    {data.company.is_active ? 'Deactivate' : 'Activate'}
-                  </Button>
-                  <Button type="button" variant="outline" className="h-9 px-3" onClick={() => { setDeleteCompanyConfirmInput(''); setIsDeleteCompanyConfirmOpen(true) }}>
-                    Delete Permanently
-                  </Button>
-                </div>
-              </section>
-
-              <div className="grid gap-3 md:grid-cols-4">
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardDescription>All Account Users</CardDescription>
-                    <CardTitle className="text-lg">{data.stats.total_user_count}</CardTitle>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <Card className="shadow-sm">
+                  <CardHeader className="p-4 pb-2">
+                    <CardTitle className="text-2xl font-bold">{data.company.facility_count}</CardTitle>
+                    <CardDescription className="text-xs font-medium uppercase tracking-wider">Sites</CardDescription>
                   </CardHeader>
                 </Card>
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardDescription>Operational Team (L1-L3)</CardDescription>
-                    <CardTitle className="text-lg">{data.stats.l1_user_count + data.stats.l2_user_count + data.stats.l3_user_count}</CardTitle>
-                  </CardHeader>
-                </Card>
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardDescription>Client Access Users</CardDescription>
-                    <CardTitle className="text-lg">{data.stats.client_user_count}</CardTitle>
-                  </CardHeader>
-                </Card>
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardDescription>Sites</CardDescription>
-                    <CardTitle className="text-lg">{data.company.facility_count}</CardTitle>
+                <Card className="shadow-sm">
+                  <CardHeader className="p-4 pb-2">
+                    <CardTitle className="text-base font-semibold">{new Date(data.company.updated_at).toLocaleString()}</CardTitle>
+                    <CardDescription className="text-xs font-medium uppercase tracking-wider">Updated</CardDescription>
                   </CardHeader>
                 </Card>
               </div>
 
               <div>
                 <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">Account Client Users</CardTitle>
-                    <CardDescription>List of client users who currently have access to this account.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
+                  <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
                     <div>
-                      <p className="mb-2 text-xs text-muted-foreground">Client users already added to this account</p>
-                      {data.clientAccessUsers.length > 0 ? (
-                        <div className="space-y-2">
-                          {data.clientAccessUsers.map((user) => (
-                            <div key={user.user_id} className="flex items-center justify-between rounded-md border border-border/70 px-3 py-2">
-                              <div>
-                                <p className="text-sm font-medium">{getClientDisplayName(user)}</p>
-                                <p className="text-xs text-muted-foreground">{user.employee_id} - {getClientDisplayEmail(user)}</p>
-                              </div>
-                              <TooltipIconButton className="h-8 w-8 hover:text-destructive" tooltip="Remove access" onClick={() => void onRevokeClientAccess(user.user_id)}>
-                                <Trash2 className="h-4 w-4" />
-                              </TooltipIconButton>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-sm text-muted-foreground">No client users are currently shared on this account.</p>
-                      )}
+                      <CardTitle className="text-sm font-semibold">Client Access</CardTitle>
+                      <CardDescription className="text-xs">Clients added to this account.</CardDescription>
                     </div>
-
-                    <div className="flex justify-end">
-                      <Button type="button" className="h-9 px-3" onClick={() => setIsAddClientUsersOpen(true)}>
-                        <UserPlus className="mr-2 h-4 w-4" />
-                        Add Users
-                      </Button>
-                    </div>
+                    <Button type="button" className="h-9 px-3" onClick={() => setIsAddClientUsersOpen(true)}>
+                      <UserPlus className="mr-2 h-4 w-4" />
+                      Add Clients
+                    </Button>
+                  </CardHeader>
+                  <CardContent>
+                    {data.clientAccessUsers.length > 0 ? (
+                      <div className="overflow-x-auto rounded-md border border-border/70">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b bg-muted/40">
+                              <th className="w-40 p-3 text-left">User ID</th>
+                              <th className="p-3 text-left">Name</th>
+                              <th className="w-16 p-3 text-left" aria-label="Actions" />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {data.clientAccessUsers.map((user) => (
+                              <tr key={user.user_id} className="group border-b last:border-b-0 hover:bg-muted/20">
+                                <td className="p-3 text-muted-foreground">{getClientDisplayUserId(user)}</td>
+                                <td className="p-3">{getClientDisplayName(user)}</td>
+                                <td className="p-3">
+                                  <div className="flex justify-end opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                                    <TooltipIconButton className="h-8 w-8" tooltip="Remove client" onClick={() => void onRevokeClientAccess(user.user_id)}>
+                                      <UserMinus className="h-4 w-4" />
+                                    </TooltipIconButton>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No clients added.</p>
+                    )}
                   </CardContent>
                 </Card>
               </div>
@@ -643,57 +641,54 @@ export default function ClientDetailsPage() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h3 className="text-base font-semibold">Sites</h3>
-                    <p className="text-xs text-muted-foreground">Single-click selects a row. Double-click opens site details.</p>
+                    <p className="text-xs text-muted-foreground">Manage sites.</p>
                   </div>
-                  <Button className="inline-flex h-9 items-center justify-center gap-2 px-3" onClick={() => openFacilityModal()}>
+                  <Button className="h-9 w-9 p-0" onClick={() => openFacilityModal()} tooltip="Add site" aria-label="Add site">
                     <Plus className="h-4 w-4" />
-                    Add
                   </Button>
                 </div>
 
                 <div className="relative">
-                  <Input value={facilitySearch} onChange={(event) => setFacilitySearch(event.target.value)} className="h-9" placeholder="Search sites" />
+                  <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
+                  <Input value={facilitySearch} onChange={(event) => setFacilitySearch(event.target.value)} placeholder="Search sites" className="pl-9" />
                 </div>
 
                 <div ref={sitesTableRef} className="overflow-x-auto rounded-md border border-border/70">
-                  <table className="w-full text-sm">
+                  <table className="w-full table-fixed text-sm">
                     <thead>
                       <tr className="border-b bg-muted/40">
-                        <th className="p-3 text-left">
+                        <th className="w-36 p-3 text-left">
                           <button type="button" onClick={() => onFacilitySort('facility_code')} className={sortButtonClass(facilitySortKey === 'facility_code')}>
-                            ID
+                            Site ID
                             {sortIcon(facilitySortKey === 'facility_code', facilitySortDirection)}
                           </button>
                         </th>
-                        <th className="p-3 text-left">
+                        <th className="w-[28%] p-3 text-left">
                           <button type="button" onClick={() => onFacilitySort('facility_name')} className={sortButtonClass(facilitySortKey === 'facility_name')}>
                             Name
                             {sortIcon(facilitySortKey === 'facility_name', facilitySortDirection)}
                           </button>
                         </th>
-                        <th className="p-3 text-left">
+                        <th className="w-28 p-3 text-left">
                           <button type="button" onClick={() => onFacilitySort('city')} className={sortButtonClass(facilitySortKey === 'city')}>
                             City
                             {sortIcon(facilitySortKey === 'city', facilitySortDirection)}
                           </button>
                         </th>
-                        <th className="p-3 text-left">
-                          <button type="button" onClick={() => onFacilitySort('total_user_count')} className={sortButtonClass(facilitySortKey === 'total_user_count')}>
-                            Users
-                            {sortIcon(facilitySortKey === 'total_user_count', facilitySortDirection)}
-                          </button>
-                        </th>
-                        <th className="p-3 text-left">L1</th>
-                        <th className="p-3 text-left">L2</th>
-                        <th className="p-3 text-left">L3</th>
-                        <th className="p-3 text-left">Status</th>
-                        <th className="p-3 text-left">
+                        <th className="w-24 p-3 text-left">Status</th>
+                        <th className="w-44 p-3 text-left">
                           <button type="button" onClick={() => onFacilitySort('created_at')} className={sortButtonClass(facilitySortKey === 'created_at')}>
                             Created
                             {sortIcon(facilitySortKey === 'created_at', facilitySortDirection)}
                           </button>
                         </th>
-                        <th className="w-[120px] p-3 text-left" aria-label="Actions" />
+                        <th className="w-44 p-3 text-left">
+                          <button type="button" onClick={() => onFacilitySort('updated_at')} className={sortButtonClass(facilitySortKey === 'updated_at')}>
+                            Updated
+                            {sortIcon(facilitySortKey === 'updated_at', facilitySortDirection)}
+                          </button>
+                        </th>
+                        <th className="w-20 p-3 text-left" aria-label="Actions" />
                       </tr>
                     </thead>
                     <tbody>
@@ -701,27 +696,80 @@ export default function ClientDetailsPage() {
                         <tr
                           key={facility.id}
                           className={`group border-b transition-colors ${selectedFacilityIds.includes(facility.id) ? 'bg-muted/25 ring-1 ring-inset ring-border/70' : 'hover:bg-muted/20'}`}
-                          onClick={(event) => onSelectFacilityRow(facility.id, rowIndex, { shift: event.shiftKey, multi: event.ctrlKey || event.metaKey })}
-                          onDoubleClick={() => navigate(`/admin/clients/${companyId}/facilities/${facility.id}`, { state: { from: `${location.pathname}${location.search}` } })}
+                          onClick={(event) => {
+                            if (event.shiftKey || event.ctrlKey || event.metaKey) {
+                              onSelectFacilityRow(facility.id, rowIndex, { shift: event.shiftKey, multi: event.ctrlKey || event.metaKey })
+                              return
+                            }
+                            navigate(`/admin/clients/${companyId}/facilities/${facility.id}`, {
+                              state: {
+                                from: `${location.pathname}${location.search}`,
+                                companyCode: data.company.company_code,
+                                facilityCode: facility.facility_code,
+                              },
+                            })
+                          }}
+                          onDoubleClick={() => navigate(`/admin/clients/${companyId}/facilities/${facility.id}`, {
+                            state: {
+                              from: `${location.pathname}${location.search}`,
+                              companyCode: data.company.company_code,
+                              facilityCode: facility.facility_code,
+                            },
+                          })}
                         >
-                          <td className="p-3">{facility.facility_code}</td>
-                          <td className="p-3">{facility.facility_name}</td>
-                          <td className="p-3 text-muted-foreground">{facility.city}</td>
-                          <td className="p-3 text-muted-foreground">{facility.total_user_count}</td>
-                          <td className="p-3 text-muted-foreground">{facility.l1_user_count}</td>
-                          <td className="p-3 text-muted-foreground">{facility.l2_user_count}</td>
-                          <td className="p-3 text-muted-foreground">{facility.l3_user_count}</td>
-                          <td className="p-3">{facility.is_active ? 'Active' : 'Inactive'}</td>
-                          <td className="p-3 text-muted-foreground">{new Date(facility.created_at).toLocaleString()}</td>
-                          <td className="p-3">
+                          <td className="w-36 p-3 text-sm">
+                            <span className="block truncate">{facility.facility_code}</span>
+                          </td>
+                          <td className="w-[28%] p-3 text-sm" title={facility.facility_name}>
+                            <span className="block truncate">{facility.facility_name}</span>
+                          </td>
+                          <td className="w-28 p-3 text-sm text-muted-foreground">{facility.city}</td>
+                          <td className="w-24 p-3 text-sm">{facility.is_active ? 'Active' : 'Inactive'}</td>
+                          <td className="w-44 p-3 text-sm text-muted-foreground">
+                            <span className="block truncate">{new Date(facility.created_at).toLocaleString()}</span>
+                          </td>
+                          <td className="w-44 p-3 text-sm text-muted-foreground">
+                            <span className="block truncate">{new Date(facility.updated_at).toLocaleString()}</span>
+                          </td>
+                          <td className="w-20 p-3">
                             <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
-                              <TooltipIconButton className="h-7 w-7" onClick={() => navigate(`/admin/clients/${companyId}/facilities/${facility.id}`, { state: { from: `${location.pathname}${location.search}` } })} tooltip="Open site details">
+                              <TooltipIconButton
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  navigate(`/admin/clients/${companyId}/facilities/${facility.id}`, {
+                                    state: {
+                                      from: `${location.pathname}${location.search}`,
+                                      companyCode: data.company.company_code,
+                                      facilityCode: facility.facility_code,
+                                    },
+                                  })
+                                }}
+                                className="h-8 w-8"
+                                tooltip="Open site details"
+                                aria-label="Open site details"
+                              >
                                 <Eye className="h-4 w-4" />
                               </TooltipIconButton>
-                              <TooltipIconButton className="h-7 w-7" onClick={() => void onToggleFacility(facility)} tooltip="Toggle site status">
-                                <Power className="h-4 w-4" />
+                              <TooltipIconButton
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void onToggleFacility(facility)
+                                }}
+                                className="h-8 w-8"
+                                tooltip={facility.is_active ? 'Deactivate site' : 'Activate site'}
+                                aria-label={facility.is_active ? 'Deactivate site' : 'Activate site'}
+                              >
+                                {facility.is_active ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
                               </TooltipIconButton>
-                              <TooltipIconButton className="h-7 w-7 hover:text-destructive" onClick={() => openDeleteFacilityConfirm(facility)} tooltip="Delete site">
+                              <TooltipIconButton
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  openDeleteFacilityConfirm(facility)
+                                }}
+                                className="h-8 w-8 hover:text-destructive"
+                                tooltip="Delete site"
+                                aria-label="Delete site"
+                              >
                                 <Trash2 className="h-4 w-4" />
                               </TooltipIconButton>
                             </div>
@@ -759,7 +807,7 @@ export default function ClientDetailsPage() {
             <div className="mb-6 flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-lg font-semibold">Edit Account</h2>
-                <p className="text-sm text-muted-foreground">Update account metadata and save.</p>
+                <p className="text-sm text-muted-foreground">Update account details.</p>
               </div>
               <Button variant="outline" size="icon" onClick={() => setIsEditCompanySidebarOpen(false)} aria-label="Close">
                 <X className="h-4 w-4" />
@@ -771,11 +819,6 @@ export default function ClientDetailsPage() {
                 <Label htmlFor="edit-companyName">Name</Label>
                 <Input id="edit-companyName" {...registerCompany('companyName')} />
                 {companyErrors.companyName ? <p className="text-xs text-destructive">{companyErrors.companyName.message}</p> : null}
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="edit-billingAddress">Billing Address</Label>
-                <Input id="edit-billingAddress" {...registerCompany('billingAddress')} />
-                {companyErrors.billingAddress ? <p className="text-xs text-destructive">{companyErrors.billingAddress.message}</p> : null}
               </div>
               <div className="space-y-2 rounded-md border border-border/70 bg-muted/20 p-3">
                 <p className="text-xs text-muted-foreground">Account Logo</p>
@@ -828,8 +871,7 @@ export default function ClientDetailsPage() {
           <Card className="max-h-[90vh] w-full max-w-4xl overflow-visible" onClick={(event) => event.stopPropagation()}>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle>Add Client Users</CardTitle>
-                <CardDescription>Only client users without current access to this account are listed.</CardDescription>
+                <CardTitle>Add Clients</CardTitle>
               </div>
               <Button type="button" variant="outline" size="icon" onClick={() => setIsAddClientUsersOpen(false)}>
                 <X className="h-4 w-4" />
@@ -868,8 +910,9 @@ export default function ClientDetailsPage() {
                   <thead>
                     <tr className="border-b bg-muted/40">
                       <th className="w-10 p-3 text-left" />
-                      <th className="p-3 text-left">User ID</th>
-                      <th className="p-3 text-left">Name</th>
+                      <th className="w-32 p-3 text-left">User ID</th>
+                      <th className="w-[24%] p-3 text-left">Name</th>
+                      <th className="w-24 p-3 text-left">Status</th>
                       <th className="p-3 text-left">Email</th>
                       <th className="p-3 text-left">Account</th>
                       <th className="p-3 text-left">Site</th>
@@ -905,6 +948,7 @@ export default function ClientDetailsPage() {
                         </td>
                         <td className="p-3 text-muted-foreground">{user.user_id}</td>
                         <td className="p-3">{user.full_name || user.email || user.user_id}</td>
+                        <td className="p-3 text-muted-foreground">{user.is_active ? 'Active' : 'Inactive'}</td>
                         <td className="p-3 text-muted-foreground">{user.email}</td>
                         <td className="p-3 text-muted-foreground">{companies.find((company) => company.id === user.company_id)?.label ?? '-'}</td>
                         <td className="p-3 text-muted-foreground">{facilities.find((site) => site.id === user.facility_id)?.label ?? '-'}</td>
@@ -938,7 +982,7 @@ export default function ClientDetailsPage() {
                   onClick={() => void onGrantClientAccess()}
                   disabled={selectedClientCandidateIds.length === 0 || grantCompanyClientAccessMutation.isPending}
                 >
-                  {grantCompanyClientAccessMutation.isPending ? 'Adding...' : 'Add Selected'}
+                  {grantCompanyClientAccessMutation.isPending ? 'Adding...' : 'Add Clients'}
                 </Button>
               </div>
             </CardContent>

@@ -4,9 +4,13 @@ import { supabase } from '@/lib/supabase'
 
 export interface CurrentProfile {
   id: string
+  employee_id: string
   full_name: string
   email: string
+  phone: string | null
   avatar_url: string | null
+  is_active: boolean
+  created_at: string
 }
 
 const currentProfileKey = ['me', 'profile'] as const
@@ -24,7 +28,7 @@ export function useCurrentProfile() {
 
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, full_name, email, avatar_url')
+        .select('id, employee_id, full_name, email, phone, avatar_url, is_active, created_at')
         .eq('id', user.id)
         .maybeSingle<CurrentProfile>()
 

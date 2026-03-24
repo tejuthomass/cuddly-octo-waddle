@@ -11,6 +11,8 @@ export const AuthContext = createContext<AuthContextValue | undefined>(undefined
 
 const SESSION_MISMATCH_MESSAGE = 'You were signed out because your account was used in a newer session.'
 const SESSION_TOAST_ID = 'session-mismatch'
+const ACCOUNT_DEACTIVATED_MESSAGE = 'Your account has been deactivated. Please contact an administrator.'
+const ACCOUNT_DEACTIVATED_TOAST_ID = 'account-deactivated'
 
 interface AuthProviderProps {
   children: React.ReactNode
@@ -65,25 +67,65 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const latestTokenRef = useRef<string | null>(null)
 
   const fetchRoles = useCallback(async (userId: string): Promise<RoleAssignment[]> => {
-    const { data, error } = await supabase
+    // Legacy system check
+    const { data: legacyData, error: legacyError } = await supabase
       .from('user_roles')
       .select('client_id, role, is_active, clients(name)')
       .eq('user_id', userId)
       .eq('is_active', true)
 
-    if (error) {
-      throw error
-    }
-
-    const rows = (data ?? []) as UserRoleSelectRow[]
-
-    const mapped = rows.map((row) => ({
+    let rows = ((legacyData ?? []) as UserRoleSelectRow[]).map((row) => ({
       clientId: row.client_id,
       clientName: row.clients?.[0]?.name ?? 'Unnamed client',
       role: row.role,
     }))
 
-    return sortRoles(mapped)
+    // In parallel or fallback, check new admin domain system `user_role_assignments`
+    // because L5/L4 or newly added users may only exist there.
+    if (rows.length === 0) {
+      const { data: newRoles, error: newError } = await supabase
+        .from('user_role_assignments')
+        .select('role_code')
+        .eq('user_id', userId)
+        .eq('is_active', true)
+
+      if (!newError && newRoles && newRoles.length > 0) {
+        const roleMap: Record<string, AppRole> = {
+          L1: 'l1_technician',
+          L2: 'l2_supervisor',
+          L3: 'l3_manager',
+          L4: 'l4_management',
+          L5: 'l5_admin',
+          CLIENT: 'client_viewer',
+        }
+        
+        const mappedRole = roleMap[newRoles[0].role_code] || 'l1_technician'
+        
+        // Attempt to get companies if they are assigned any
+        const { data: companies } = await supabase
+          .from('user_companies')
+          .select('company_id, companies(company_name)')
+          .eq('user_id', userId)
+          .eq('is_active', true)
+
+        if (companies && companies.length > 0) {
+          rows = companies.map(uc => ({
+            clientId: uc.company_id,
+            clientName: (Array.isArray(uc.companies) ? uc.companies[0]?.company_name : (uc.companies as any)?.company_name) ?? 'Unnamed Company',
+            role: mappedRole
+          }))
+        } else {
+          // If no mapped companies but they have a global role like L5, give them a system context.
+          rows = [{
+            clientId: 'system',
+            clientName: 'Global System',
+            role: mappedRole
+          }]
+        }
+      }
+    }
+
+    return sortRoles(rows)
   }, [])
 
   const clearLocalAuthState = useCallback(() => {
@@ -101,6 +143,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
     clearLocalAuthState()
     toast.error(SESSION_MISMATCH_MESSAGE, { id: SESSION_TOAST_ID })
   }, [clearLocalAuthState])
+
+  const forceSignOutForDeactivatedAccount = useCallback(async (userId: string) => {
+    localStorage.removeItem(getContextStorageKey(userId))
+    await supabase.auth.signOut()
+    clearLocalAuthState()
+    toast.error(ACCOUNT_DEACTIVATED_MESSAGE, { id: ACCOUNT_DEACTIVATED_TOAST_ID })
+  }, [clearLocalAuthState])
+
+  const validateUserIsActive = useCallback(async (userId: string) => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('is_active')
+      .eq('id', userId)
+      .maybeSingle<{ is_active: boolean }>()
+
+    if (error) {
+      throw error
+    }
+
+    if (!data || data.is_active === false) {
+      await forceSignOutForDeactivatedAccount(userId)
+      return false
+    }
+
+    return true
+  }, [forceSignOutForDeactivatedAccount])
 
   const persistContext = useCallback((userId: string, nextContext: ActiveOrganizationContext | null) => {
     const storageKey = getContextStorageKey(userId)
@@ -225,6 +293,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [forceSignOutForSessionMismatch])
 
   const validateCurrentSession = useCallback(async (nextUser: User, nextSession: Session) => {
+    const isActive = await validateUserIsActive(nextUser.id)
+    if (!isActive) {
+      return false
+    }
+
     const nextToken = nextSession.access_token
 
     const { data, error } = await supabase
@@ -247,7 +320,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     await forceSignOutForSessionMismatch(nextUser.id)
     return false
-  }, [forceSignOutForSessionMismatch])
+  }, [forceSignOutForSessionMismatch, validateUserIsActive])
 
   const hydrateUserState = useCallback(
     async (
@@ -259,6 +332,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
     ): Promise<void> => {
       if (!nextSession || !nextUser) {
         clearLocalAuthState()
+        return
+      }
+
+      const isActive = await validateUserIsActive(nextUser.id)
+      if (!isActive) {
         return
       }
 
@@ -286,7 +364,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setActiveContext(initialContext)
       persistContext(nextUser.id, initialContext)
     },
-    [clearLocalAuthState, claimActiveSession, fetchRoles, persistContext, resolveInitialContext, validateCurrentSession],
+    [clearLocalAuthState, claimActiveSession, fetchRoles, persistContext, resolveInitialContext, validateCurrentSession, validateUserIsActive],
   )
 
   const refreshRoles = useCallback(async () => {
@@ -531,6 +609,40 @@ export function AuthProvider({ children }: AuthProviderProps) {
       void supabase.removeChannel(channel)
     }
   }, [forceSignOutForSessionMismatch, user])
+
+  useEffect(() => {
+    if (!user) {
+      return
+    }
+
+    const channel = supabase
+      .channel(`profile-active-state-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'profiles',
+          filter: `id=eq.${user.id}`,
+        },
+        (payload) => {
+          if (payload.eventType === 'DELETE') {
+            void forceSignOutForDeactivatedAccount(user.id)
+            return
+          }
+
+          const nextIsActive = (payload.new as { is_active?: boolean } | null)?.is_active
+          if (nextIsActive === false) {
+            void forceSignOutForDeactivatedAccount(user.id)
+          }
+        },
+      )
+      .subscribe()
+
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [forceSignOutForDeactivatedAccount, user])
 
   useEffect(() => {
     latestTokenRef.current = session?.access_token ?? null

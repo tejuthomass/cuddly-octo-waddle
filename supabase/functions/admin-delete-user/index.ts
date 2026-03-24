@@ -163,6 +163,15 @@ Deno.serve(async (request) => {
     return jsonResponse(500, { error: (error as Error).message })
   }
 
+  const { error: deleteActiveSessionsError } = await adminClient
+    .from('active_sessions')
+    .delete()
+    .eq('user_id', targetUserId)
+
+  if (deleteActiveSessionsError) {
+    return jsonResponse(500, { error: deleteActiveSessionsError.message })
+  }
+
   const { error: deleteError } = await adminClient.auth.admin.deleteUser(targetUserId)
   if (deleteError) {
     return jsonResponse(500, { error: deleteError.message })

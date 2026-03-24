@@ -104,8 +104,8 @@ export function TopBar() {
           ) : null}
 
           {activeContext ? (
-            <div className="flex h-9 items-center rounded-md border border-input bg-background px-3 text-xs text-foreground">
-              {compactRoleLabel(activeContext.role)}
+            <div className="flex items-center px-1 text-xs font-medium text-muted-foreground" aria-label="Active role">
+              Role: {compactRoleLabel(activeContext.role)}
             </div>
           ) : null}
 

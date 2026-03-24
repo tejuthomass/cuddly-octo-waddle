@@ -6,12 +6,12 @@ export interface AdminCompanyRow {
   id: string
   company_code: string
   company_name: string
-  billing_address: string
   logo_url: string | null
   facility_count: number
   scoped_user_count: number
   is_active: boolean
   created_at: string
+  updated_at: string
 }
 
 export interface AdminFacilityRow {
@@ -25,6 +25,7 @@ export interface AdminFacilityRow {
   country: string
   is_active: boolean
   created_at: string
+  updated_at: string
   companies: Array<{ company_name: string }> | null
 }
 
@@ -58,14 +59,7 @@ export interface AdminFacilityMembers {
 
 export interface AdminCompanyDetails {
   company: AdminCompanyRow
-  stats: {
-    total_user_count: number
-    l1_user_count: number
-    l2_user_count: number
-    l3_user_count: number
-    client_user_count: number
-  }
-  facilities: AdminFacilityWithUserStats[]
+  facilities: AdminFacilityRow[]
   accountUsers: Array<{
     user_id: string
     employee_id: string
@@ -98,14 +92,6 @@ const facilitiesKey = (companyId?: string) => ['admin', 'facilities', companyId 
 const facilityMembersKey = (facilityId?: string) => ['admin', 'facility-members', facilityId ?? 'missing'] as const
 const adminKey = ['admin'] as const
 
-function buildActiveProfileSet(rows: Array<{ id: string; is_active: boolean }> | null | undefined) {
-  const set = new Set<string>()
-  for (const row of rows ?? []) {
-    if (row.is_active) set.add(row.id)
-  }
-  return set
-}
-
 function buildActiveScopedRoleByUser(rows: Array<{ user_id: string; role_code: RoleCode; is_active: boolean }> | null | undefined) {
   const map = new Map<string, RoleCode>()
   for (const row of rows ?? []) {
@@ -125,18 +111,6 @@ export function useAdminCompanies() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'companies' }, () => {
         void queryClient.invalidateQueries({ queryKey: companiesKey })
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'facilities' }, () => {
-        void queryClient.invalidateQueries({ queryKey: companiesKey })
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_companies' }, () => {
-        void queryClient.invalidateQueries({ queryKey: companiesKey })
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
-        void queryClient.invalidateQueries({ queryKey: companiesKey })
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_role_assignments' }, () => {
-        void queryClient.invalidateQueries({ queryKey: companiesKey })
-      })
       .subscribe()
 
     return () => {
@@ -147,54 +121,17 @@ export function useAdminCompanies() {
   return useQuery({
     queryKey: companiesKey,
     queryFn: async () => {
-      const [companiesResponse, facilitiesResponse, companyAccessResponse, profilesResponse, rolesResponse] = await Promise.all([
-        supabase
-          .from('companies')
-          .select('id, company_code, company_name, billing_address, logo_url, is_active, created_at')
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('facilities')
-          .select('company_id'),
-        supabase
-          .from('user_companies')
-          .select('company_id, user_id, is_active'),
-        supabase
-          .from('profiles')
-          .select('id, employee_id, full_name, email, is_active'),
-        supabase
-          .from('user_role_assignments')
-          .select('user_id, role_code, is_active'),
-      ])
+      const { data, error } = await supabase
+        .from('companies')
+        .select('id, company_code, company_name, logo_url, is_active, created_at, updated_at')
+        .order('created_at', { ascending: false })
 
-      if (companiesResponse.error) throw companiesResponse.error
-      if (facilitiesResponse.error) throw facilitiesResponse.error
-      if (companyAccessResponse.error) throw companyAccessResponse.error
-      if (profilesResponse.error) throw profilesResponse.error
-      if (rolesResponse.error) throw rolesResponse.error
+      if (error) throw error
 
-      const activeProfileIds = buildActiveProfileSet(profilesResponse.data)
-      const activeScopedRoleByUser = buildActiveScopedRoleByUser(rolesResponse.data as Array<{ user_id: string; role_code: RoleCode; is_active: boolean }> | null)
-
-      const facilityCountByCompanyId = new Map<string, number>()
-      for (const row of facilitiesResponse.data ?? []) {
-        facilityCountByCompanyId.set(row.company_id, (facilityCountByCompanyId.get(row.company_id) ?? 0) + 1)
-      }
-
-      const scopedUsersByCompanyId = new Map<string, Set<string>>()
-      for (const row of companyAccessResponse.data ?? []) {
-        if (!row.is_active) continue
-        if (!activeProfileIds.has(row.user_id)) continue
-        if (!activeScopedRoleByUser.has(row.user_id)) continue
-
-        const current = scopedUsersByCompanyId.get(row.company_id) ?? new Set<string>()
-        current.add(row.user_id)
-        scopedUsersByCompanyId.set(row.company_id, current)
-      }
-
-      return (companiesResponse.data ?? []).map((row) => ({
+      return (data ?? []).map((row) => ({
         ...row,
-        facility_count: facilityCountByCompanyId.get(row.id) ?? 0,
-        scoped_user_count: scopedUsersByCompanyId.get(row.id)?.size ?? 0,
+        facility_count: 0,
+        scoped_user_count: 0,
       })) as AdminCompanyRow[]
     },
   })
@@ -217,9 +154,7 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'user_companies' }, () => {
         void queryClient.invalidateQueries({ queryKey: companyDetailsKey(companyId) })
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_facilities' }, () => {
-        void queryClient.invalidateQueries({ queryKey: companyDetailsKey(companyId) })
-      })
+
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
         void queryClient.invalidateQueries({ queryKey: companyDetailsKey(companyId) })
       })
@@ -239,15 +174,15 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
     queryFn: async (): Promise<AdminCompanyDetails> => {
       if (!companyId) throw new Error('Company not found.')
 
-      const [companyResponse, facilitiesResponse, userCompaniesResponse, userFacilitiesResponse, profilesResponse, rolesResponse] = await Promise.all([
+      const [companyResponse, facilitiesResponse, userCompaniesResponse, profilesResponse, rolesResponse] = await Promise.all([
         supabase
           .from('companies')
-          .select('id, company_code, company_name, billing_address, logo_url, is_active, created_at')
+          .select('id, company_code, company_name, logo_url, is_active, created_at, updated_at')
           .eq('id', companyId)
           .maybeSingle(),
         supabase
           .from('facilities')
-          .select('id, facility_code, company_id, facility_name, address_line_1, city, state, country, is_active, created_at, companies(company_name)')
+          .select('id, facility_code, company_id, facility_name, address_line_1, city, state, country, is_active, created_at, updated_at, companies(company_name)')
           .eq('company_id', companyId)
           .order('created_at', { ascending: false }),
         supabase
@@ -255,11 +190,8 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
           .select('company_id, user_id, is_active')
           .eq('company_id', companyId),
         supabase
-          .from('user_facilities')
-          .select('facility_id, user_id, is_active'),
-        supabase
           .from('profiles')
-          .select('id, is_active'),
+          .select('id, employee_id, full_name, email, is_active'),
         supabase
           .from('user_role_assignments')
           .select('user_id, role_code, is_active'),
@@ -268,86 +200,21 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
       if (companyResponse.error) throw companyResponse.error
       if (facilitiesResponse.error) throw facilitiesResponse.error
       if (userCompaniesResponse.error) throw userCompaniesResponse.error
-      if (userFacilitiesResponse.error) throw userFacilitiesResponse.error
+
       if (profilesResponse.error) throw profilesResponse.error
       if (rolesResponse.error) throw rolesResponse.error
 
       if (!companyResponse.data) throw new Error('Client not found.')
 
-      const facilityRows = (facilitiesResponse.data ?? []) as AdminFacilityRow[]
-      const facilityIds = new Set(facilityRows.map((row) => row.id))
+      const facilities = (facilitiesResponse.data ?? []) as AdminFacilityRow[]
 
-      const activeProfileIds = buildActiveProfileSet(profilesResponse.data)
       const activeScopedRoleByUser = buildActiveScopedRoleByUser(rolesResponse.data as Array<{ user_id: string; role_code: RoleCode; is_active: boolean }> | null)
 
-      const companyScopedUsers = new Set<string>()
+      const companyUserIds = new Set<string>()
       for (const row of userCompaniesResponse.data ?? []) {
         if (!row.is_active) continue
-        if (!activeProfileIds.has(row.user_id)) continue
-        if (!activeScopedRoleByUser.has(row.user_id)) continue
-        companyScopedUsers.add(row.user_id)
+        companyUserIds.add(row.user_id)
       }
-
-      const companyStats = {
-        total_user_count: companyScopedUsers.size,
-        l1_user_count: 0,
-        l2_user_count: 0,
-        l3_user_count: 0,
-        client_user_count: 0,
-      }
-
-      for (const userId of companyScopedUsers) {
-        const roleCode = activeScopedRoleByUser.get(userId)
-        if (roleCode === 'L1') companyStats.l1_user_count += 1
-        if (roleCode === 'L2') companyStats.l2_user_count += 1
-        if (roleCode === 'L3') companyStats.l3_user_count += 1
-        if (roleCode === 'CLIENT') companyStats.client_user_count += 1
-      }
-
-      const facilityUserSets = new Map<string, {
-        total: Set<string>
-        l1: Set<string>
-        l2: Set<string>
-        l3: Set<string>
-      }>()
-
-      for (const facilityId of facilityIds) {
-        facilityUserSets.set(facilityId, {
-          total: new Set<string>(),
-          l1: new Set<string>(),
-          l2: new Set<string>(),
-          l3: new Set<string>(),
-        })
-      }
-
-      for (const row of userFacilitiesResponse.data ?? []) {
-        if (!row.is_active) continue
-        if (!facilityIds.has(row.facility_id)) continue
-        if (!activeProfileIds.has(row.user_id)) continue
-
-        const roleCode = activeScopedRoleByUser.get(row.user_id)
-        if (!roleCode) continue
-        if (roleCode === 'CLIENT') continue
-
-        const statsSet = facilityUserSets.get(row.facility_id)
-        if (!statsSet) continue
-
-        statsSet.total.add(row.user_id)
-        if (roleCode === 'L1') statsSet.l1.add(row.user_id)
-        if (roleCode === 'L2') statsSet.l2.add(row.user_id)
-        if (roleCode === 'L3') statsSet.l3.add(row.user_id)
-      }
-
-      const facilities = facilityRows.map((row) => {
-        const statsSet = facilityUserSets.get(row.id)
-        return {
-          ...row,
-          total_user_count: statsSet?.total.size ?? 0,
-          l1_user_count: statsSet?.l1.size ?? 0,
-          l2_user_count: statsSet?.l2.size ?? 0,
-          l3_user_count: statsSet?.l3.size ?? 0,
-        }
-      })
 
       const profileById = new Map<string, { employee_id: string; full_name: string; email: string; is_active: boolean }>()
       for (const row of (profilesResponse.data ?? []) as Array<{ id: string; employee_id: string | null; full_name: string | null; email: string | null; is_active: boolean }>) {
@@ -361,7 +228,7 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
         })
       }
 
-      const accountUsers = Array.from(companyScopedUsers)
+      const accountUsers = Array.from(companyUserIds)
         .map((userId) => {
           const profile = profileById.get(userId)
           const roleCode = activeScopedRoleByUser.get(userId)
@@ -407,13 +274,12 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
 
       const company: AdminCompanyRow = {
         ...companyResponse.data,
-        facility_count: facilityRows.length,
-        scoped_user_count: companyStats.total_user_count,
+        facility_count: facilities.length,
+        scoped_user_count: accountUsers.length,
       }
 
       return {
         company,
-        stats: companyStats,
         facilities,
         accountUsers,
         clientAccessUsers,
@@ -472,11 +338,10 @@ export function useCreateCompany() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (payload: { companyName: string; billingAddress: string }) => {
+    mutationFn: async (payload: { companyName: string }) => {
       const { error } = await supabase.from('companies').insert({
         name: payload.companyName,
         company_name: payload.companyName,
-        billing_address: payload.billingAddress,
         is_active: true,
       })
 
@@ -492,13 +357,12 @@ export function useUpdateCompany() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (payload: { companyId: string; companyName: string; billingAddress: string }) => {
+    mutationFn: async (payload: { companyId: string; companyName: string }) => {
       const { error } = await supabase
         .from('companies')
         .update({
           name: payload.companyName,
           company_name: payload.companyName,
-          billing_address: payload.billingAddress,
         })
         .eq('id', payload.companyId)
 
@@ -628,7 +492,7 @@ export function useAdminFacilities(companyId?: string) {
     queryFn: async () => {
       let query = supabase
         .from('facilities')
-        .select('id, facility_code, company_id, facility_name, address_line_1, city, state, country, is_active, created_at, companies(company_name)')
+        .select('id, facility_code, company_id, facility_name, address_line_1, city, state, country, is_active, created_at, updated_at, companies(company_name)')
         .order('created_at', { ascending: false })
 
       if (companyId) {
@@ -751,7 +615,7 @@ export function useAdminFacility(facilityId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('facilities')
-        .select('id, facility_code, company_id, facility_name, address_line_1, city, state, country, is_active, created_at, companies(id, company_code, company_name, is_active)')
+        .select('id, facility_code, company_id, facility_name, address_line_1, city, state, country, is_active, created_at, updated_at, companies(id, company_code, company_name, is_active)')
         .eq('id', facilityId)
         .maybeSingle<AdminFacilityDetailsRow>()
 
@@ -800,7 +664,7 @@ export function useAdminFacilityMembers(facilityId: string | undefined) {
 
       const facilityResponse = await supabase
         .from('facilities')
-        .select('id, facility_code, company_id, facility_name, address_line_1, city, state, country, is_active, created_at, companies(id, company_code, company_name, is_active)')
+        .select('id, facility_code, company_id, facility_name, address_line_1, city, state, country, is_active, created_at, updated_at, companies(id, company_code, company_name, is_active)')
         .eq('id', facilityId)
         .maybeSingle<AdminFacilityDetailsRow>()
 

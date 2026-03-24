@@ -52,7 +52,7 @@ Deno.serve(async (request) => {
   const { data: callerAuth, error: callerAuthError } = await adminClient.auth.getUser(jwt)
 
   if (callerAuthError || !callerAuth.user) {
-    return jsonResponse(401, { error: 'Invalid caller token.' })
+    return jsonResponse(401, { error: callerAuthError?.message || 'Invalid caller token.' })
   }
 
   const callerUserId = callerAuth.user.id
@@ -66,7 +66,7 @@ Deno.serve(async (request) => {
     .limit(1)
 
   if (callerRolesError) {
-    return jsonResponse(500, { error: callerRolesError.message })
+    return jsonResponse(500, { error: `Role check failed: ${callerRolesError.message}` })
   }
 
   if (!callerRoles || callerRoles.length === 0) {
@@ -120,7 +120,7 @@ Deno.serve(async (request) => {
   })
 
   if (authUpdateError) {
-    return jsonResponse(400, { error: authUpdateError.message })
+    return jsonResponse(500, { error: `Auth update failed: ${authUpdateError.message}` })
   }
 
   const { error: profileUpdateError } = await adminClient

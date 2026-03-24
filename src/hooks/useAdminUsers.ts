@@ -13,6 +13,7 @@ export interface AdminUserRow {
   phone: string | null
   is_active: boolean
   created_at: string
+  updated_at: string | null
   role_code: RoleCode | null
   role_title: string | null
   company_id: string | null
@@ -71,6 +72,9 @@ async function parseFunctionInvokeError(error: unknown): Promise<never> {
     }
 
     if (detailedMessage) {
+      if (detailedMessage === 'Invalid JWT') {
+         throw new Error(`Edge Function authorization failed (Invalid session). Please refresh the page and try again.`)
+      }
       throw new Error(detailedMessage)
     }
 
@@ -230,7 +234,7 @@ export function useAdminUsers() {
       const [profilesResponse, rolesResponse, companiesResponse, facilitiesResponse] = await Promise.all([
         supabase
           .from('profiles')
-          .select('id, employee_id, full_name, email, avatar_url, phone, is_active, created_at')
+          .select('id, employee_id, full_name, email, avatar_url, phone, is_active, created_at, updated_at')
           .order('created_at', { ascending: false }),
         supabase
           .from('user_role_assignments')
@@ -290,6 +294,7 @@ export function useAdminUsers() {
           phone: profile.phone,
           is_active: profile.is_active,
           created_at: profile.created_at,
+          updated_at: profile.updated_at,
           role_code: role?.role_code ?? null,
           role_title: role?.role_title ?? null,
           company_id: companyIds[0] ?? null,
@@ -364,6 +369,17 @@ export function useToggleUserActive() {
 
       if (!verifyRow || verifyRow.is_active !== payload.isActive) {
         throw new Error('Status update was not applied. Check admin permissions and row-level policies.')
+      }
+
+      if (payload.isActive === false) {
+        const { error: sessionError } = await supabase
+          .from('active_sessions')
+          .delete()
+          .eq('user_id', payload.userId)
+          
+        if (sessionError) {
+           console.error('Failed to clear sessions for deactivated user', sessionError)
+        }
       }
     },
     onSuccess: async () => {
@@ -473,15 +489,75 @@ export function useHardDeleteUser() {
 export function useResetAdminUserPassword() {
   return useMutation({
     mutationFn: async (payload: { userId: string }) => {
-      const { error } = await supabase.functions.invoke('admin-reset-user-password', {
-        body: {
-          user_id: payload.userId,
-        },
-      })
+      const invokeResetPassword = async () =>
+        supabase.functions.invoke('admin-reset-user-password', {
+          body: {
+            user_id: payload.userId,
+          },
+        })
+
+      let { error } = await invokeResetPassword()
+
+      if (error) {
+        const rawErrorMessage = String((error as { message?: string }).message ?? '')
+        const looksLikeSessionIssue = /invalid jwt|jwt|session/i.test(rawErrorMessage)
+
+        if (looksLikeSessionIssue) {
+          const { error: refreshError } = await supabase.auth.refreshSession()
+          if (!refreshError) {
+            const retry = await invokeResetPassword()
+            error = retry.error
+          }
+        }
+      }
 
       if (error) {
         await parseFunctionInvokeError(error)
       }
+    },
+  })
+}
+
+export function useAdminUpdateUserAvatar() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (payload: { userId: string; avatarBlob: Blob | null }) => {
+      const storagePath = `${payload.userId}/avatar.webp`
+      let avatarUrl: string | null = null
+
+      if (payload.avatarBlob) {
+        const { error: uploadError } = await supabase.storage
+          .from('avatars')
+          .upload(storagePath, payload.avatarBlob, { upsert: true, contentType: 'image/webp' })
+
+        if (uploadError) {
+          throw new Error(`Upload error: ${uploadError.message}`)
+        }
+
+        const { data: publicUrlData } = supabase.storage.from('avatars').getPublicUrl(storagePath)
+        avatarUrl = `${publicUrlData.publicUrl}?v=${Date.now()}`
+      } else {
+        const { error: removeError } = await supabase.storage.from('avatars').remove([storagePath])
+        if (removeError && !String(removeError.message ?? '').toLowerCase().includes('not found')) {
+          throw removeError
+        }
+      }
+
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update({ avatar_url: avatarUrl })
+        .eq('id', payload.userId)
+
+      if (updateError) {
+        throw new Error(`Profile update error: ${updateError.message}`)
+      }
+
+      return avatarUrl
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: usersQueryKey })
+      await queryClient.invalidateQueries({ queryKey: ['me', 'profile'] })
     },
   })
 }

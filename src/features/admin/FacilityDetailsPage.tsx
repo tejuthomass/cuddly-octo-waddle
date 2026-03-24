@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Pencil, Trash2, X } from 'lucide-react'
+import { Pencil, Trash2, X, Power, PowerOff } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -174,44 +174,41 @@ export default function FacilityDetailsPage() {
   return (
     <main className="space-y-6 p-6">
       <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        <CardHeader className="sticky top-0 z-20 rounded-t-xl border-b border-border/70 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+          <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <CardTitle>Site</CardTitle>
+              <CardTitle className="text-2xl tracking-tight">Site Details</CardTitle>
               <CardDescription>
                 {facility
-                  ? `${facility.facility_code} - ${facility.companies?.[0]?.company_name ?? 'Unknown account'}`
-                  : 'Edit site details'}
+                  ? `${facility.facility_code} — ${facility.companies?.[0]?.company_name ?? 'Unknown account'}`
+                  : 'Loading site details'}
               </CardDescription>
             </div>
-            <Button
+            <button
               type="button"
-              variant="outline"
-              className="h-9 px-3"
+              className="ml-auto rounded-md p-2 hover:bg-muted/50"
               onClick={() => {
                 if (fromState) {
                   navigate(fromState)
                   return
                 }
-
                 if (companyId) {
                   navigate(`/admin/clients/${companyId}`)
                   return
                 }
-
                 if (facility?.companies?.[0]?.id) {
                   navigate(`/admin/clients/${facility.companies[0].id}`)
                   return
                 }
-
                 navigate('/admin/clients')
               }}
+              aria-label="Go back"
             >
-              Back
-            </Button>
+              <X className="h-5 w-5" />
+            </button>
           </div>
         </CardHeader>
-        <CardContent className="space-y-6">
+        <CardContent className="space-y-6 pt-4">
           {isLoading ? (
             <p className="text-sm text-muted-foreground">Loading...</p>
           ) : facility ? (
@@ -310,7 +307,6 @@ export default function FacilityDetailsPage() {
                 <Card>
                   <CardHeader>
                     <CardTitle className="text-base">Assigned Site Users</CardTitle>
-                    <CardDescription>Only L1-L3 users are assigned at site level.</CardDescription>
                   </CardHeader>
                   <CardContent>
                     {facilityData?.assignedUsers.length ? (
@@ -346,7 +342,6 @@ export default function FacilityDetailsPage() {
                 <Card>
                   <CardHeader>
                     <CardTitle className="text-base">Add Existing Company Users</CardTitle>
-                    <CardDescription>Eligible users are active company members with L1, L2, or L3 roles.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
                     {assignableUsers.length > 0 ? (
