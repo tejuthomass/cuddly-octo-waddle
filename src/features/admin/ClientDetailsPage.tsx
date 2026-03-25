@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowDown, ArrowDownUp, ArrowUp, Eye, Pencil, Plus, Power, PowerOff, Search, Trash2, Upload, UserMinus, UserPlus, X } from 'lucide-react'
+import { ArrowDown, ArrowDownUp, ArrowLeft, ArrowUp, Eye, Pencil, Plus, Power, PowerOff, Search, Trash2, Upload, UserMinus, UserPlus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -505,9 +505,10 @@ export default function ClientDetailsPage() {
                   : 'Loading account details'}
               </CardDescription>
             </div>
-            <TooltipIconButton className="ml-auto h-9 w-9" tooltip="Close" onClick={() => navigate(backTarget)} aria-label="Go back">
-              <X className="h-4 w-4" />
-            </TooltipIconButton>
+            <Button variant="outline" size="sm" className="ml-auto gap-2" onClick={() => navigate(backTarget)}>
+              <ArrowLeft className="h-4 w-4" />
+              <span>Back to Accounts</span>
+            </Button>
           </div>
         </CardHeader>
 
@@ -516,78 +517,137 @@ export default function ClientDetailsPage() {
             <p className="text-sm text-muted-foreground">Loading...</p>
           ) : data ? (
             <>
-              <div className="flex flex-col gap-4 rounded-xl border border-border/70 bg-card p-5 md:flex-row md:items-start md:gap-6 shadow-sm">
-                <div className="flex-shrink-0 mt-1">
-                  {data.company.logo_url ? (
-                    <img src={data.company.logo_url} alt={data.company.company_name} className="h-20 w-20 rounded-xl border border-border/50 object-cover shadow-sm" />
-                  ) : (
-                    <div className="flex h-20 w-20 items-center justify-center rounded-xl border border-border/50 bg-muted/50 text-2xl font-semibold shadow-sm text-muted-foreground">
-                      {data.company.company_name.slice(0, 1).toUpperCase()}
-                    </div>
-                  )}
-                </div>
-                
-                <div className="flex-1 space-y-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h2 className="text-xl font-semibold tracking-tight">{data.company.company_name}</h2>
-                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-                        <span className="inline-flex items-center gap-1.5">
-                          ID: <span className="font-medium text-foreground">{data.company.company_code}</span>
-                        </span>
-                        <span>•</span>
-                        <span className="inline-flex items-center gap-1.5">
-                          Status: <span className="font-medium text-foreground">{data.company.is_active ? 'Active' : 'Inactive'}</span>
-                        </span>
-                        <span>•</span>
-                        <span className="inline-flex items-center gap-1.5">
-                          Created: <span className="font-medium text-foreground">{new Date(data.company.created_at).toLocaleDateString()}</span>
-                        </span>
-                        <span>•</span>
-                        <span className="inline-flex items-center gap-1.5">
-                          Updated: <span className="font-medium text-foreground">{new Date(data.company.updated_at).toLocaleDateString()}</span>
-                        </span>
+              <div className="flex flex-col gap-6">
+                <div className="flex flex-col gap-4 rounded-xl border border-border/70 bg-gradient-to-br from-card to-muted/20 p-6 md:flex-row md:items-center md:gap-8 shadow-sm">
+                  <div className="flex-shrink-0">
+                    {data.company.logo_url ? (
+                      <img src={data.company.logo_url} alt={data.company.company_name} className="h-24 w-24 rounded-2xl border border-border/50 object-cover shadow-sm ring-4 ring-background" />
+                    ) : (
+                      <div className="flex h-24 w-24 items-center justify-center rounded-2xl border border-border/50 bg-primary/10 text-3xl font-semibold shadow-sm text-primary ring-4 ring-background">
+                        {data.company.company_name.slice(0, 1).toUpperCase()}
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="flex-1 space-y-2">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-3">
+                          <h2 className="text-2xl font-bold tracking-tight text-foreground">{data.company.company_name}</h2>
+                          {data.company.is_active ? (
+                           <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">Active</span>
+                          ) : (
+                           <span className="inline-flex items-center rounded-full border border-rose-500/20 bg-rose-500/10 px-2.5 py-0.5 text-xs font-semibold text-rose-600 dark:text-rose-400">Inactive</span>
+                          )}
+                        </div>
+                        <p className="text-sm font-medium text-muted-foreground/80">
+                          Account ID: <span className="font-mono text-foreground">{data.company.company_code}</span>
+                        </p>
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        <TooltipIconButton tooltip="Edit Details" onClick={() => setIsEditCompanySidebarOpen(true)}>
+                          <Pencil className="h-4 w-4" />
+                        </TooltipIconButton>
+                        <TooltipIconButton 
+                          tooltip={data.company.is_active ? 'Deactivate' : 'Activate'} 
+                          onClick={() => void onToggleCompany()}
+                          disabled={toggleCompanyMutation.isPending}
+                          className={data.company.is_active ? 'hover:text-amber-600 hover:bg-amber-600/10' : 'hover:text-emerald-600 hover:bg-emerald-600/10'}
+                        >
+                          <PowerOff className="h-4 w-4" />
+                        </TooltipIconButton>
+                        <TooltipIconButton 
+                          tooltip="Delete Permanently" 
+                          onClick={() => { setDeleteCompanyConfirmInput(''); setIsDeleteCompanyConfirmOpen(true) }}
+                          className="hover:text-destructive hover:bg-destructive/10"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </TooltipIconButton>
                       </div>
                     </div>
                     
-                    <div className="flex items-center gap-1 text-muted-foreground">
-                      <TooltipIconButton tooltip="Edit Details" onClick={() => setIsEditCompanySidebarOpen(true)}>
-                        <Pencil className="h-4 w-4" />
-                      </TooltipIconButton>
-                      <TooltipIconButton 
-                        tooltip={data.company.is_active ? 'Deactivate' : 'Activate'} 
-                        onClick={() => void onToggleCompany()}
-                        disabled={toggleCompanyMutation.isPending}
-                        className={data.company.is_active ? 'hover:text-destructive hover:bg-destructive/10' : ''}
-                      >
-                        <PowerOff className="h-4 w-4" />
-                      </TooltipIconButton>
-                      <TooltipIconButton 
-                        tooltip="Delete Permanently" 
-                        onClick={() => { setDeleteCompanyConfirmInput(''); setIsDeleteCompanyConfirmOpen(true) }}
-                        className="hover:text-destructive hover:bg-destructive/10"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </TooltipIconButton>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-2 text-xs text-muted-foreground">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="font-medium text-foreground/80">Created:</span>
+                        {new Date(data.company.created_at).toLocaleString()}
+                      </span>
+                      <span className="text-border">•</span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="font-medium text-foreground/80">Updated:</span>
+                        {new Date(data.company.updated_at).toLocaleString()}
+                      </span>
                     </div>
                   </div>
-                  
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <Card className="shadow-sm">
-                  <CardHeader className="p-4 pb-2">
-                    <CardTitle className="text-2xl font-bold">{data.company.facility_count}</CardTitle>
-                    <CardDescription className="text-xs font-medium uppercase tracking-wider">Sites</CardDescription>
-                  </CardHeader>
-                </Card>
-                <Card className="shadow-sm">
-                  <CardHeader className="p-4 pb-2">
-                    <CardTitle className="text-base font-semibold">{new Date(data.company.updated_at).toLocaleString()}</CardTitle>
-                    <CardDescription className="text-xs font-medium uppercase tracking-wider">Updated</CardDescription>
-                  </CardHeader>
-                </Card>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <Card className="shadow-sm">
+                    <CardHeader className="p-4">
+                      <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Sites</CardTitle>
+                      <div className="mt-2 flex items-baseline gap-2">
+                        <span className="text-2xl font-bold">{data.stats.sites.active + data.stats.sites.inactive}</span>
+                        <span className="text-sm text-muted-foreground">Total</span>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-0">
+                      <div className="flex items-center justify-between text-sm">
+                        <div className="flex flex-col">
+                          <span className="font-medium text-emerald-600 dark:text-emerald-500">{data.stats.sites.active}</span>
+                          <span className="text-muted-foreground text-xs">Active</span>
+                        </div>
+                        <div className="flex flex-col text-right">
+                          <span className="font-medium text-rose-600 dark:text-rose-500">{data.stats.sites.inactive}</span>
+                          <span className="text-muted-foreground text-xs">Inactive</span>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                  
+                  <Card className="shadow-sm">
+                    <CardHeader className="p-4">
+                      <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Client Users</CardTitle>
+                      <div className="mt-2 flex items-baseline gap-2">
+                        <span className="text-2xl font-bold">{data.stats.clients.active + data.stats.clients.inactive}</span>
+                        <span className="text-sm text-muted-foreground">Total</span>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-0">
+                      <div className="flex items-center justify-between text-sm">
+                        <div className="flex flex-col">
+                          <span className="font-medium text-emerald-600 dark:text-emerald-500">{data.stats.clients.active}</span>
+                          <span className="text-muted-foreground text-xs">Active</span>
+                        </div>
+                        <div className="flex flex-col text-right">
+                          <span className="font-medium text-rose-600 dark:text-rose-500">{data.stats.clients.inactive}</span>
+                          <span className="text-muted-foreground text-xs">Inactive</span>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="shadow-sm">
+                    <CardHeader className="p-4">
+                      <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Ops Team</CardTitle>
+                      <div className="mt-2 flex items-baseline gap-2">
+                        <span className="text-2xl font-bold">{data.stats.users.active + data.stats.users.inactive}</span>
+                        <span className="text-sm text-muted-foreground">Total</span>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-0">
+                      <div className="flex items-center justify-between text-sm">
+                        <div className="flex flex-col">
+                          <span className="font-medium text-emerald-600 dark:text-emerald-500">{data.stats.users.active}</span>
+                          <span className="text-muted-foreground text-xs">Active</span>
+                        </div>
+                        <div className="flex flex-col text-right">
+                          <span className="font-medium text-rose-600 dark:text-rose-500">{data.stats.users.inactive}</span>
+                          <span className="text-muted-foreground text-xs">Inactive</span>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
               </div>
 
               <div>
@@ -599,7 +659,7 @@ export default function ClientDetailsPage() {
                     </div>
                     <Button type="button" className="h-9 px-3" onClick={() => setIsAddClientUsersOpen(true)}>
                       <UserPlus className="mr-2 h-4 w-4" />
-                      Add Clients
+                      Provide Access
                     </Button>
                   </CardHeader>
                   <CardContent>
@@ -610,6 +670,7 @@ export default function ClientDetailsPage() {
                             <tr className="border-b bg-muted/40">
                               <th className="w-40 p-3 text-left">User ID</th>
                               <th className="p-3 text-left">Name</th>
+                              <th className="w-24 p-3 text-left">Status</th>
                               <th className="w-16 p-3 text-left" aria-label="Actions" />
                             </tr>
                           </thead>
@@ -618,6 +679,13 @@ export default function ClientDetailsPage() {
                               <tr key={user.user_id} className="group border-b last:border-b-0 hover:bg-muted/20">
                                 <td className="p-3 text-muted-foreground">{getClientDisplayUserId(user)}</td>
                                 <td className="p-3">{getClientDisplayName(user)}</td>
+                                <td className="p-3">
+                                  {user.is_active ? (
+                                    <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">Active</span>
+                                  ) : (
+                                    <span className="inline-flex items-center rounded-full border border-rose-500/20 bg-rose-500/10 px-2 py-0.5 text-xs font-medium text-rose-600 dark:text-rose-400">Inactive</span>
+                                  )}
+                                </td>
                                 <td className="p-3">
                                   <div className="flex justify-end opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
                                     <TooltipIconButton className="h-8 w-8" tooltip="Remove client" onClick={() => void onRevokeClientAccess(user.user_id)}>
@@ -643,8 +711,9 @@ export default function ClientDetailsPage() {
                     <h3 className="text-base font-semibold">Sites</h3>
                     <p className="text-xs text-muted-foreground">Manage sites.</p>
                   </div>
-                  <Button className="h-9 w-9 p-0" onClick={() => openFacilityModal()} tooltip="Add site" aria-label="Add site">
-                    <Plus className="h-4 w-4" />
+                  <Button className="h-9 px-3" onClick={() => openFacilityModal()}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Create Site
                   </Button>
                 </div>
 
@@ -706,6 +775,8 @@ export default function ClientDetailsPage() {
                                 from: `${location.pathname}${location.search}`,
                                 companyCode: data.company.company_code,
                                 facilityCode: facility.facility_code,
+                                companyName: data.company.company_name,
+                                facilityName: facility.facility_name,
                               },
                             })
                           }}
@@ -714,6 +785,8 @@ export default function ClientDetailsPage() {
                               from: `${location.pathname}${location.search}`,
                               companyCode: data.company.company_code,
                               facilityCode: facility.facility_code,
+                              companyName: data.company.company_name,
+                              facilityName: facility.facility_name,
                             },
                           })}
                         >
@@ -741,6 +814,8 @@ export default function ClientDetailsPage() {
                                       from: `${location.pathname}${location.search}`,
                                       companyCode: data.company.company_code,
                                       facilityCode: facility.facility_code,
+                                      companyName: data.company.company_name,
+                                      facilityName: facility.facility_name,
                                     },
                                   })
                                 }}

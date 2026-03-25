@@ -357,13 +357,13 @@ export default function ClientManagementPage() {
                     <tr
                       key={company.id}
                       className={`group border-b transition-colors ${selectedCompanyIds.includes(company.id) ? 'bg-muted/25 ring-1 ring-inset ring-border/70' : 'hover:bg-muted/20'}`}
-                      onDoubleClick={() => navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}`, companyCode: company.company_code } })}
+                      onDoubleClick={() => navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}`, companyCode: company.company_code, companyName: company.company_name } })}
                       onClick={(event) => {
                         if (event.shiftKey || event.ctrlKey || event.metaKey) {
                           onSelectCompanyRow(company.id, rowIndex, { shift: event.shiftKey, multi: event.ctrlKey || event.metaKey })
                           return
                         }
-                        navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}`, companyCode: company.company_code } })
+                        navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}`, companyCode: company.company_code, companyName: company.company_name } })
                       }}
                     >
                       <td className="w-12 p-3 align-middle">
@@ -415,7 +415,7 @@ export default function ClientManagementPage() {
                           <TooltipIconButton
                             onClick={(event) => {
                               event.stopPropagation()
-                              navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}`, companyCode: company.company_code } })
+                              navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}`, companyCode: company.company_code, companyName: company.company_name } })
                             }}
                             className="h-8 w-8"
                             tooltip="Open account details"

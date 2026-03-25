@@ -57,8 +57,15 @@ export interface AdminFacilityMembers {
   companyAssignableUsers: FacilityAssignableUser[]
 }
 
+export interface AdminCompanyStats {
+  sites: { active: number; inactive: number }
+  clients: { active: number; inactive: number }
+  users: { active: number; inactive: number }
+}
+
 export interface AdminCompanyDetails {
   company: AdminCompanyRow
+  stats: AdminCompanyStats
   facilities: AdminFacilityRow[]
   accountUsers: Array<{
     user_id: string
@@ -66,18 +73,21 @@ export interface AdminCompanyDetails {
     full_name: string
     email: string
     role_code: RoleCode
+    is_active: boolean
   }>
   clientAccessUsers: Array<{
     user_id: string
     employee_id: string
     full_name: string
     email: string
+    is_active: boolean
   }>
   clientAccessCandidates: Array<{
     user_id: string
     employee_id: string
     full_name: string
     email: string
+    is_active: boolean
   }>
 }
 
@@ -241,9 +251,10 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
             full_name: profile.full_name,
             email: profile.email,
             role_code: roleCode,
+            is_active: profile.is_active,
           }
         })
-        .filter((row): row is { user_id: string; employee_id: string; full_name: string; email: string; role_code: RoleCode } => Boolean(row))
+        .filter((row): row is NonNullable<typeof row> => Boolean(row))
         .sort((a, b) => a.full_name.localeCompare(b.full_name))
 
       const clientAccessUsers = accountUsers
@@ -253,6 +264,7 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
           employee_id: row.employee_id,
           full_name: row.full_name,
           email: row.email,
+          is_active: row.is_active,
         }))
 
       const clientAccessCandidates = Array.from(activeScopedRoleByUser.entries())
@@ -266,9 +278,10 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
             employee_id: profile.employee_id,
             full_name: profile.full_name,
             email: profile.email,
+            is_active: profile.is_active,
           }
         })
-        .filter((row): row is { user_id: string; employee_id: string; full_name: string; email: string } => Boolean(row))
+        .filter((row): row is NonNullable<typeof row> => Boolean(row))
         .filter((row) => !clientAccessUsers.some((existing) => existing.user_id === row.user_id))
         .sort((a, b) => a.full_name.localeCompare(b.full_name))
 
@@ -278,8 +291,49 @@ export function useAdminCompanyDetails(companyId: string | undefined) {
         scoped_user_count: accountUsers.length,
       }
 
+      const stats: AdminCompanyStats = {
+        sites: { active: 0, inactive: 0 },
+        clients: { active: 0, inactive: 0 },
+        users: { active: 0, inactive: 0 },
+      }
+
+      for (const facility of facilities) {
+        if (facility.is_active) stats.sites.active++
+        else stats.sites.inactive++
+      }
+
+      const primaryRoleByUser = new Map<string, { role_code: RoleCode; is_active: boolean }>()
+      for (const row of (rolesResponse.data ?? []) as Array<{ user_id: string; role_code: RoleCode; is_active: boolean }>) {
+        if (!scopedRoles.has(row.role_code)) continue
+        const existing = primaryRoleByUser.get(row.user_id)
+        if (!existing || (!existing.is_active && row.is_active)) {
+          primaryRoleByUser.set(row.user_id, { role_code: row.role_code, is_active: row.is_active })
+        }
+      }
+
+      for (const row of userCompaniesResponse.data ?? []) {
+        if (!row.is_active) continue
+
+        const userId = row.user_id
+        const profile = profileById.get(userId)
+        const roleInfo = primaryRoleByUser.get(userId)
+        
+        if (!profile || !roleInfo) continue
+        
+        const isFullyActive = row.is_active && profile.is_active && roleInfo.is_active
+
+        if (roleInfo.role_code === 'CLIENT') {
+          if (isFullyActive) stats.clients.active++
+          else stats.clients.inactive++
+        } else if (roleInfo.role_code === 'L1' || roleInfo.role_code === 'L2' || roleInfo.role_code === 'L3') {
+          if (isFullyActive) stats.users.active++
+          else stats.users.inactive++
+        }
+      }
+
       return {
         company,
+        stats,
         facilities,
         accountUsers,
         clientAccessUsers,

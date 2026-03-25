@@ -16,19 +16,28 @@ const labelMap: Record<string, string> = {
   password: 'Password',
 }
 
-function segmentLabel(segment: string, previousSegment?: string, navigationState?: { companyCode?: string; facilityCode?: string } | null) {
+function segmentLabel(
+  segment: string,
+  previousSegment?: string,
+  navigationState?: { companyCode?: string; facilityCode?: string; companyName?: string; facilityName?: string } | null,
+) {
   if (labelMap[segment]) return labelMap[segment]
 
   const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(segment)
-  if (looksLikeUuid && previousSegment === 'clients') return navigationState?.companyCode ?? 'Account'
-  if (looksLikeUuid && previousSegment === 'facilities') return navigationState?.facilityCode ?? 'Site'
+  if (looksLikeUuid && previousSegment === 'clients') return navigationState?.companyName ?? navigationState?.companyCode ?? 'Account'
+  if (looksLikeUuid && previousSegment === 'facilities') return navigationState?.facilityName ?? navigationState?.facilityCode ?? 'Site'
 
   return segment.length > 12 ? segment.slice(0, 12).toUpperCase() : segment.toUpperCase()
 }
 
 export function Breadcrumbs() {
   const location = useLocation()
-  const navigationState = location.state as { companyCode?: string; facilityCode?: string } | null
+  const navigationState = location.state as {
+    companyCode?: string
+    facilityCode?: string
+    companyName?: string
+    facilityName?: string
+  } | null
 
   const pathSegments = location.pathname.split('/').filter(Boolean)
   if (pathSegments.length === 0) return null
