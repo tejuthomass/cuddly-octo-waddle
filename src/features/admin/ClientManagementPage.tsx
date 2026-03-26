@@ -12,6 +12,14 @@ import { Label } from '@/components/ui/label'
 import { PageSizeSelect } from '@/components/ui/page-size-select'
 import { TooltipIconButton } from '@/components/ui/tooltip-icon-button'
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
   type AdminCompanyRow,
   useAdminCompanies,
   useCreateCompany,
@@ -303,11 +311,11 @@ export default function ClientManagementPage() {
           {companiesLoading ? (
             <p className="text-sm text-muted-foreground">Loading...</p>
           ) : (
-            <div ref={tableContainerRef} className="overflow-x-auto rounded-md border border-border/70">
-              <table className="w-full table-fixed text-sm">
-                <thead>
-                  <tr className="border-b bg-muted/40">
-                    <th className="w-12 p-3 text-left" aria-label="Select rows">
+            <div ref={tableContainerRef} className="rounded-md border border-border/70">
+              <Table className="table-fixed text-sm">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-12 px-4 py-3 align-middle" aria-label="Select rows">
                       <button
                         type="button"
                         className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50"
@@ -323,40 +331,41 @@ export default function ClientManagementPage() {
                           aria-label={allPageSelected ? 'Deselect current page' : 'Select current page'}
                         />
                       </button>
-                    </th>
-                    <th className="w-36 p-3 text-left">
+                    </TableHead>
+                    <TableHead className="w-36 px-4 py-3">
                       <button type="button" onClick={() => onCompanySort('company_code')} className={sortButtonClass(companySortKey === 'company_code')}>
                         Account ID
                         {sortIcon(companySortKey === 'company_code', companySortDirection)}
                       </button>
-                    </th>
-                    <th className="w-[30%] p-3 text-left">
+                    </TableHead>
+                    <TableHead className="w-[30%] px-4 py-3">
                       <button type="button" onClick={() => onCompanySort('company_name')} className={sortButtonClass(companySortKey === 'company_name')}>
                         Name
                         {sortIcon(companySortKey === 'company_name', companySortDirection)}
                       </button>
-                    </th>
-                    <th className="w-24 p-3 text-left">Status</th>
-                    <th className="w-44 p-3 text-left">
+                    </TableHead>
+                    <TableHead className="w-24 px-4 py-3">Status</TableHead>
+                    <TableHead className="w-44 px-4 py-3">
                       <button type="button" onClick={() => onCompanySort('created_at')} className={sortButtonClass(companySortKey === 'created_at')}>
                         Created
                         {sortIcon(companySortKey === 'created_at', companySortDirection)}
                       </button>
-                    </th>
-                    <th className="w-44 p-3 text-left">
+                    </TableHead>
+                    <TableHead className="w-44 px-4 py-3">
                       <button type="button" onClick={() => onCompanySort('updated_at')} className={sortButtonClass(companySortKey === 'updated_at')}>
                         Updated
                         {sortIcon(companySortKey === 'updated_at', companySortDirection)}
                       </button>
-                    </th>
-                    <th className="w-20 p-3 text-left" aria-label="Actions" />
-                  </tr>
-                </thead>
-                <tbody>
+                    </TableHead>
+                    <TableHead className="w-20 px-4 py-3" aria-label="Actions" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {pagedCompanies.map((company, rowIndex) => (
-                    <tr
+                    <TableRow
                       key={company.id}
-                      className={`group border-b transition-colors ${selectedCompanyIds.includes(company.id) ? 'bg-muted/25 ring-1 ring-inset ring-border/70' : 'hover:bg-muted/20'}`}
+                      data-state={selectedCompanyIds.includes(company.id) ? 'selected' : undefined}
+                      className="group transition-colors"
                       onDoubleClick={() => navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}`, companyCode: company.company_code, companyName: company.company_name } })}
                       onClick={(event) => {
                         if (event.shiftKey || event.ctrlKey || event.metaKey) {
@@ -366,7 +375,7 @@ export default function ClientManagementPage() {
                         navigate(`/admin/clients/${company.id}`, { state: { from: `${location.pathname}${location.search}`, companyCode: company.company_code, companyName: company.company_name } })
                       }}
                     >
-                      <td className="w-12 p-3 align-middle">
+                      <TableCell className="w-12 px-4 py-3 align-middle">
                         <div className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50">
                           <button
                             type="button"
@@ -387,31 +396,37 @@ export default function ClientManagementPage() {
                             />
                           </button>
                         </div>
-                      </td>
-                      <td className="w-36 p-3 text-sm">
+                      </TableCell>
+                      <TableCell className="w-36 px-4 py-3 text-sm font-medium">
                         <span className="block truncate">{company.company_code}</span>
-                      </td>
-                      <td className="w-[30%] p-3" title={company.company_name}>
-                        <span className="inline-flex w-full items-center gap-2">
+                      </TableCell>
+                      <TableCell className="w-[30%] px-4 py-3" title={company.company_name}>
+                        <span className="inline-flex w-full items-center gap-3">
                           {company.logo_url ? (
-                            <img src={company.logo_url} alt={company.company_name} className="h-6 w-6 rounded-full border border-border object-cover" />
+                            <img src={company.logo_url} alt={company.company_name} className="h-7 w-7 rounded-full border border-border object-cover" />
                           ) : (
-                            <span className="flex h-6 w-6 items-center justify-center rounded-full border border-border bg-muted text-[10px] font-semibold">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-full shadow-sm border border-border bg-muted text-xs font-semibold">
                               {clientFallback(company)}
                             </span>
                           )}
                           <span className="min-w-0 truncate">{company.company_name}</span>
                         </span>
-                      </td>
-                      <td className="w-24 p-3 text-sm">{company.is_active ? 'Active' : 'Inactive'}</td>
-                      <td className="w-44 p-3 text-sm text-muted-foreground">
+                      </TableCell>
+                      <TableCell className="w-24 px-4 py-3 text-sm">
+                        {company.is_active ? (
+                          <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">Active</span>
+                        ) : (
+                          <span className="inline-flex items-center rounded-full border border-rose-500/20 bg-rose-500/10 px-2.5 py-0.5 text-[11px] font-medium text-rose-600 dark:text-rose-400">Inactive</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="w-44 px-4 py-3 text-[13px] text-muted-foreground">
                         <span className="block truncate">{new Date(company.created_at).toLocaleString()}</span>
-                      </td>
-                      <td className="w-44 p-3 text-sm text-muted-foreground">
+                      </TableCell>
+                      <TableCell className="w-44 px-4 py-3 text-[13px] text-muted-foreground">
                         <span className="block truncate">{new Date(company.updated_at).toLocaleString()}</span>
-                      </td>
-                      <td className="w-20 p-3">
-                        <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                      </TableCell>
+                      <TableCell className="w-20 px-4 py-3">
+                        <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
                           <TooltipIconButton
                             onClick={(event) => {
                               event.stopPropagation()
@@ -428,18 +443,18 @@ export default function ClientManagementPage() {
                               event.stopPropagation()
                               void onToggleCompanyInline(company)
                             }}
-                            className="h-8 w-8"
+                            className="h-8 w-8 hover:bg-amber-600/10 hover:text-amber-600"
                             tooltip={company.is_active ? 'Deactivate account' : 'Activate account'}
                             aria-label={company.is_active ? 'Deactivate account' : 'Activate account'}
                           >
                             {company.is_active ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
                           </TooltipIconButton>
                         </div>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
           )}
 

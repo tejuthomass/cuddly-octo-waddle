@@ -15,6 +15,14 @@ import { SearchableSelect } from '@/components/ui/searchable-select'
 import { TooltipIconButton } from '@/components/ui/tooltip-icon-button'
 import type { RoleCode } from '@/hooks/useAdminAccess'
 import { useCompanyOptions, useFacilityOptions } from '@/hooks/useAdminAccess'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { useAuth } from '@/hooks/useAuth'
 import {
   type AdminUserRow,
@@ -1518,11 +1526,11 @@ export default function UserManagementPage() {
           {isLoading ? (
             <p className="text-sm text-muted-foreground">Loading users...</p>
           ) : (
-            <div className="overflow-x-auto rounded-md border border-border/70">
-              <table className="w-full table-fixed text-sm">
-                <thead>
-                  <tr className="border-b bg-muted/40">
-                    <th className="w-12 p-3 align-middle text-left" aria-label="Select rows">
+            <div className="rounded-md border border-border/70">
+              <Table className="table-fixed text-sm">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-12 px-4 py-3 align-middle" aria-label="Select rows">
                       <button
                         type="button"
                         className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50"
@@ -1538,44 +1546,45 @@ export default function UserManagementPage() {
                           aria-label={allPageSelected ? 'Deselect current page' : 'Select current page'}
                         />
                       </button>
-                    </th>
-                    <th className="w-32 p-3 text-left">
+                    </TableHead>
+                    <TableHead className="w-32 px-4 py-3">
                       <button type="button" onClick={() => onSort('user_id')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'user_id' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         User ID
                         {sortIcon('user_id')}
                       </button>
-                    </th>
-                    <th className="w-[32%] p-3 text-left">
+                    </TableHead>
+                    <TableHead className="w-[32%] px-4 py-3">
                       <button type="button" onClick={() => onSort('full_name')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'full_name' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         Name
                         {sortIcon('full_name')}
                       </button>
-                    </th>
-                    <th className="w-20 p-3 text-left">
+                    </TableHead>
+                    <TableHead className="w-20 px-4 py-3">
                       <button type="button" onClick={() => onSort('role_code')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'role_code' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         Type
                         {sortIcon('role_code')}
                       </button>
-                    </th>
-                    <th className="w-24 p-3 text-left">
+                    </TableHead>
+                    <TableHead className="w-24 px-4 py-3">
                       <button type="button" onClick={() => onSort('is_active')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'is_active' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         Status
                         {sortIcon('is_active')}
                       </button>
-                    </th>
-                    <th className="w-44 p-3 text-left">
+                    </TableHead>
+                    <TableHead className="w-44 px-4 py-3">
                       <button type="button" onClick={() => onSort('created_at')} className={`inline-flex items-center gap-1 font-medium ${sortKey === 'created_at' ? 'text-foreground' : 'text-muted-foreground'}`}>
                         Created
                         {sortIcon('created_at')}
                       </button>
-                    </th>
-                    <th className="w-20 p-3 text-left" aria-label="Actions" />
-                  </tr>
-                </thead>
-                <tbody>
+                    </TableHead>
+                    <TableHead className="w-20 px-4 py-3" aria-label="Actions" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {pagedUsers.map((row) => (
-                    <tr
+                    <TableRow
                       key={row.id}
+                      data-state={selectedUserIds.includes(row.id) ? 'selected' : undefined}
                       onDoubleClick={() => openUserDetails(row)}
                       onClick={(event) => {
                         if (event.shiftKey || event.ctrlKey || event.metaKey) {
@@ -1585,9 +1594,9 @@ export default function UserManagementPage() {
 
                         openUserDetails(row)
                       }}
-                      className={`group border-b transition-colors ${selectedUserIds.includes(row.id) ? 'bg-muted/25 ring-1 ring-inset ring-border/70' : 'hover:bg-muted/20'}`}
+                      className="group transition-colors"
                     >
-                      <td className="w-12 p-3 align-middle">
+                      <TableCell className="w-12 px-4 py-3 align-middle">
                         <div className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50">
                           {currentUser?.id === row.id ? null : (
                             <button
@@ -1610,16 +1619,16 @@ export default function UserManagementPage() {
                             </button>
                           )}
                         </div>
-                      </td>
-                      <td className="w-32 p-3 text-sm">
+                      </TableCell>
+                      <TableCell className="w-32 px-4 py-3 text-sm font-medium">
                         <ThemedHoverText text={row.user_id} className="block truncate" />
-                      </td>
-                      <td className="w-[32%] p-3" title={row.full_name || 'Unnamed user'}>
-                        <span className="inline-flex w-full items-center gap-2">
+                      </TableCell>
+                      <TableCell className="w-[32%] px-4 py-3" title={row.full_name || 'Unnamed user'}>
+                        <span className="inline-flex w-full items-center gap-3">
                           {row.avatar_url ? (
-                            <img src={row.avatar_url} alt={row.full_name || row.user_id} className="h-6 w-6 rounded-full border border-border object-cover" />
+                            <img src={row.avatar_url} alt={row.full_name || row.user_id} className="h-7 w-7 rounded-full border border-border object-cover" />
                           ) : (
-                            <span className="flex h-6 w-6 items-center justify-center rounded-full border border-border bg-muted text-[10px] font-semibold">
+                            <span className="flex h-7 w-7 shadow-sm items-center justify-center rounded-full border border-border bg-muted text-xs font-semibold">
                               {(row.full_name || row.user_id).slice(0, 1).toUpperCase()}
                             </span>
                           )}
@@ -1628,18 +1637,24 @@ export default function UserManagementPage() {
                             <span className="inline-flex rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">You</span>
                           ) : null}
                         </span>
-                      </td>
-                      <td className="w-20 p-3">
-                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${roleBadgeClass(row.role_code)}`}>
+                      </TableCell>
+                      <TableCell className="w-20 px-4 py-3">
+                        <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${roleBadgeClass(row.role_code)}`}>
                           {row.role_code ?? '-'}
                         </span>
-                      </td>
-                      <td className="w-24 p-3">{row.is_active ? 'Active' : 'Inactive'}</td>
-                      <td className="w-44 p-3 text-muted-foreground">
+                      </TableCell>
+                      <TableCell className="w-24 px-4 py-3">
+                        {row.is_active ? (
+                          <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">Active</span>
+                        ) : (
+                          <span className="inline-flex items-center rounded-full border border-rose-500/20 bg-rose-500/10 px-2.5 py-0.5 text-[11px] font-medium text-rose-600 dark:text-rose-400">Inactive</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="w-44 px-4 py-3 text-muted-foreground text-[13px]">
                         <ThemedHoverText text={new Date(row.created_at).toLocaleString()} className="block truncate" />
-                      </td>
-                      <td className="w-20 p-3">
-                        <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                      </TableCell>
+                      <TableCell className="w-20 px-4 py-3">
+                        <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
                           <TooltipIconButton
                             onClick={(event) => {
                               event.stopPropagation()
@@ -1659,7 +1674,7 @@ export default function UserManagementPage() {
                                   event.stopPropagation()
                                   onToggleUserInline(row)
                                 }}
-                                className="h-8 w-8"
+                                className="h-8 w-8 hover:bg-amber-600/10 hover:text-amber-600"
                                 tooltip={row.is_active ? 'Deactivate user' : 'Activate user'}
                                 aria-label={row.is_active ? 'Deactivate user' : 'Activate user'}
                                 disabled={toggleUserMutation.isPending}
@@ -1669,11 +1684,11 @@ export default function UserManagementPage() {
                             </>
                           ) : null}
                         </div>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
           )}
 
@@ -2034,7 +2049,7 @@ export default function UserManagementPage() {
                 <div className="grid grid-cols-[150px_minmax(0,1fr)] gap-2">
                   <SearchableSelect
                     value={detailCountryCode}
-                    onChange={(value) => setDetailValue('countryCode', value, { shouldValidate: true })}
+                    onChange={(value) => setDetailValue('countryCode', value, { shouldValidate: true, shouldDirty: true })}
                     options={countryPhoneOptions}
                     className={detailReadOnlyClass}
                     placeholder="Code"
@@ -2058,15 +2073,15 @@ export default function UserManagementPage() {
                     onChange={(value) => {
                       if (!isEditingDetails) return
                       const next = value as RoleCode
-                      setDetailValue('roleCode', next, { shouldValidate: true })
-                      setDetailValue('roleTitle', roleTitleByCode[next])
+                      setDetailValue('roleCode', next, { shouldValidate: true, shouldDirty: true })
+                      setDetailValue('roleTitle', roleTitleByCode[next], { shouldDirty: true })
                       if (isGlobalRole(next)) {
-                        setDetailValue('companyIds', [])
-                        setDetailValue('facilityIds', [])
+                        setDetailValue('companyIds', [], { shouldDirty: true })
+                        setDetailValue('facilityIds', [], { shouldDirty: true })
                       } else if (next === 'CLIENT') {
-                        setDetailValue('facilityIds', [])
+                        setDetailValue('facilityIds', [], { shouldDirty: true })
                       } else {
-                        setDetailValue('companyIds', [])
+                        setDetailValue('companyIds', [], { shouldDirty: true })
                       }
                     }}
                     className={detailReadOnlyClass}
@@ -2204,29 +2219,31 @@ export default function UserManagementPage() {
               ) : null}
             </form>
             {!isSelfSelected ? (
-              <div className="mt-8 space-y-3 rounded-md border border-destructive/30 bg-destructive/5 p-4">
-                <h3 className="text-sm font-semibold">User Lifecycle Actions</h3>
-                <p className="text-xs text-muted-foreground">Deactivate for leavers. Permanent delete for mistaken users only.</p>
-                <div className="flex flex-wrap gap-3">
+              <div className="mt-8 space-y-4 rounded-md border border-destructive/20 bg-destructive/5 p-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-destructive">Danger Zone</h3>
+                  <p className="text-xs text-destructive/80">Manage access limits and permanent deletion for this user.</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
                   <Button
-                    className="h-9 px-3"
+                    className="h-9 px-4 border-destructive/30 text-destructive hover:bg-destructive hover:text-destructive-foreground focus-visible:ring-destructive"
+                    variant="outline"
+                    onClick={() => onOpenUserStatusConfirm(selectedUser, !selectedUser.is_active)}
+                    disabled={toggleUserMutation.isPending}
+                  >
+                    {selectedUser.is_active ? 'Deactivate User' : 'Activate User'}
+                  </Button>
+                  <Button
+                    className="h-9 px-4 border-destructive/30 text-destructive hover:bg-destructive hover:text-destructive-foreground focus-visible:ring-destructive"
                     variant="outline"
                     onClick={() => void onResetPasswordToPhone(selectedUser)}
                     disabled={resetPasswordMutation.isPending}
                   >
-                    {resetPasswordMutation.isPending ? 'Resetting...' : 'Reset PW'}
+                    {resetPasswordMutation.isPending ? 'Resetting...' : 'Reset Password'}
                   </Button>
                   <Button
-                    className="h-9 px-3"
-                    variant={selectedUser.is_active ? 'destructive' : 'secondary'}
-                    onClick={() => onOpenUserStatusConfirm(selectedUser, !selectedUser.is_active)}
-                    disabled={toggleUserMutation.isPending}
-                  >
-                    {selectedUser.is_active ? 'Deactivate' : 'Activate'}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-9 px-3"
+                    variant="destructive"
+                    className="h-9 px-4"
                     onClick={() => {
                       setDeleteTargetUser(selectedUser)
                       setDeleteConfirmInput('')
@@ -2234,7 +2251,7 @@ export default function UserManagementPage() {
                     }}
                     disabled={hardDeleteUserMutation.isPending}
                   >
-                    Delete
+                    Delete Permanently
                   </Button>
                 </div>
               </div>

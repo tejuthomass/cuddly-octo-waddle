@@ -45,9 +45,19 @@ export interface FacilityAssignedUser {
   full_name: string
   employee_id: string
   role_code: 'L1' | 'L2' | 'L3'
+  is_active: boolean
+  created_at: string
+  phone_number: string | null
 }
 
-export interface FacilityAssignableUser extends FacilityAssignedUser {
+export interface FacilityAssignableUser {
+  user_id: string
+  full_name: string
+  employee_id: string
+  role_code: 'L1' | 'L2' | 'L3'
+  is_active: boolean
+  created_at: string
+  phone_number: string | null
   assigned: boolean
 }
 
@@ -730,7 +740,7 @@ export function useAdminFacilityMembers(facilityId: string | undefined) {
       const [profilesResponse, rolesResponse, companyAccessResponse, facilityAccessResponse] = await Promise.all([
         supabase
           .from('profiles')
-          .select('id, full_name, employee_id, is_active'),
+          .select('id, full_name, employee_id, is_active, created_at, phone'),
         supabase
           .from('user_role_assignments')
           .select('user_id, role_code, is_active')
@@ -750,24 +760,24 @@ export function useAdminFacilityMembers(facilityId: string | undefined) {
       if (companyAccessResponse.error) throw companyAccessResponse.error
       if (facilityAccessResponse.error) throw facilityAccessResponse.error
 
-      const activeProfiles = new Map<string, { full_name: string; employee_id: string }>()
+      const activeProfiles = new Map<string, { full_name: string; employee_id: string; is_active: boolean; created_at: string; phone: string | null }>()
       for (const row of profilesResponse.data ?? []) {
-        if (!row.is_active) continue
         activeProfiles.set(row.id, {
           full_name: row.full_name ?? 'Unnamed user',
           employee_id: row.employee_id ?? '-',
+          is_active: row.is_active,
+          created_at: row.created_at ?? new Date().toISOString(),
+          phone: row.phone ?? null,
         })
       }
 
       const roleByUser = new Map<string, 'L1' | 'L2' | 'L3'>()
       for (const row of (rolesResponse.data ?? []) as Array<{ user_id: string; role_code: 'L1' | 'L2' | 'L3'; is_active: boolean }>) {
-        if (!row.is_active) continue
         roleByUser.set(row.user_id, row.role_code)
       }
 
       const activeCompanyUsers = new Set<string>()
       for (const row of companyAccessResponse.data ?? []) {
-        if (!row.is_active) continue
         activeCompanyUsers.add(row.user_id)
       }
 
@@ -778,7 +788,7 @@ export function useAdminFacilityMembers(facilityId: string | undefined) {
       }
 
       const companyAssignableUsers: FacilityAssignableUser[] = []
-      for (const userId of activeCompanyUsers) {
+      for (const userId of roleByUser.keys()) {
         const profile = activeProfiles.get(userId)
         const role = roleByUser.get(userId)
         if (!profile || !role) continue
@@ -788,8 +798,11 @@ export function useAdminFacilityMembers(facilityId: string | undefined) {
           full_name: profile.full_name,
           employee_id: profile.employee_id,
           role_code: role,
+          is_active: profile.is_active,
+          created_at: profile.created_at,
+          phone_number: profile.phone,
           assigned: activeFacilityUsers.has(userId),
-        })
+        } as FacilityAssignableUser)
       }
 
       companyAssignableUsers.sort((a, b) => {
@@ -798,9 +811,17 @@ export function useAdminFacilityMembers(facilityId: string | undefined) {
         return a.employee_id.localeCompare(b.employee_id)
       })
 
-      const assignedUsers = companyAssignableUsers
+      const assignedUsers: FacilityAssignedUser[] = companyAssignableUsers
         .filter((row) => row.assigned)
-        .map(({ assigned, ...user }) => user)
+        .map(({ assigned, ...user }) => ({
+          user_id: user.user_id,
+          full_name: user.full_name,
+          employee_id: user.employee_id,
+          role_code: user.role_code,
+          is_active: user.is_active,
+          created_at: user.created_at,
+          phone_number: (user as any).phone_number,
+        }) as FacilityAssignedUser)
 
       return {
         facility: facilityResponse.data,

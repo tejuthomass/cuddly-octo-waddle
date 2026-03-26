@@ -3,16 +3,23 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowDown, ArrowDownUp, ArrowLeft, ArrowUp, Eye, Pencil, Plus, Power, PowerOff, Search, Trash2, Upload, UserMinus, UserPlus, X } from 'lucide-react'
+import { ArrowDown, ArrowDownUp, ArrowLeft, ArrowUp, CircleHelp, Eye, Pencil, Plus, Power, PowerOff, Search, Upload, UserMinus, UserPlus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { PageSizeSelect } from '@/components/ui/page-size-select'
 import { SearchableSelect } from '@/components/ui/searchable-select'
 import { TooltipIconButton } from '@/components/ui/tooltip-icon-button'
-import { useCompanyOptions, useFacilityOptions } from '@/hooks/useAdminAccess'
 import { useAdminUsers } from '@/hooks/useAdminUsers'
 import {
   type AdminFacilityRow,
@@ -20,7 +27,6 @@ import {
   useCreateFacility,
   useGrantCompanyClientAccess,
   useHardDeleteCompany,
-  useHardDeleteFacility,
   useRevokeCompanyClientAccess,
   useToggleCompanyActive,
   useToggleFacilityActive,
@@ -69,8 +75,6 @@ export default function ClientDetailsPage() {
 
   const { data, isLoading } = useAdminCompanyDetails(companyId)
   const { data: users = [] } = useAdminUsers()
-  const { data: companies = [] } = useCompanyOptions()
-  const { data: facilities = [] } = useFacilityOptions()
   const updateCompanyMutation = useUpdateCompany()
   const toggleCompanyMutation = useToggleCompanyActive()
   const deleteCompanyMutation = useHardDeleteCompany()
@@ -80,7 +84,7 @@ export default function ClientDetailsPage() {
   const createFacilityMutation = useCreateFacility()
   const updateFacilityMutation = useUpdateFacility()
   const toggleFacilityMutation = useToggleFacilityActive()
-  const deleteFacilityMutation = useHardDeleteFacility()
+
 
   const [facilitySearch, setFacilitySearch] = useState('')
   const [facilitySortKey, setFacilitySortKey] = useState<FacilitySortKey>('created_at')
@@ -90,21 +94,19 @@ export default function ClientDetailsPage() {
   const [selectedFacilityIds, setSelectedFacilityIds] = useState<string[]>([])
   const [lastSelectedFacilityIndex, setLastSelectedFacilityIndex] = useState<number | null>(null)
   const [selectedClientCandidateIds, setSelectedClientCandidateIds] = useState<string[]>([])
+  const [selectedClientAccessIds, setSelectedClientAccessIds] = useState<string[]>([])
+  const [lastSelectedClientAccessIndex, setLastSelectedClientAccessIndex] = useState<number | null>(null)
+  const [isRemoveClientConfirmOpen, setIsRemoveClientConfirmOpen] = useState(false)
+  const [clientToRemove, setClientToRemove] = useState<string | null>(null)
 
   const [isFacilityModalOpen, setIsFacilityModalOpen] = useState(false)
   const [isEditCompanySidebarOpen, setIsEditCompanySidebarOpen] = useState(false)
   const [editingFacility, setEditingFacility] = useState<AdminFacilityRow | null>(null)
-  const [isDeleteFacilityConfirmOpen, setIsDeleteFacilityConfirmOpen] = useState(false)
-  const [deleteFacilityConfirmInput, setDeleteFacilityConfirmInput] = useState('')
-  const [deleteTargetFacility, setDeleteTargetFacility] = useState<AdminFacilityRow | null>(null)
   const [isDeleteCompanyConfirmOpen, setIsDeleteCompanyConfirmOpen] = useState(false)
   const [deleteCompanyConfirmInput, setDeleteCompanyConfirmInput] = useState('')
   const [isAddClientUsersOpen, setIsAddClientUsersOpen] = useState(false)
   const [clientUserSearch, setClientUserSearch] = useState('')
-  const [clientUserCompanyFilter, setClientUserCompanyFilter] = useState<string>('ALL')
-  const [clientUserFacilityFilter, setClientUserFacilityFilter] = useState<string>('ALL')
-  const [clientUserPage, setClientUserPage] = useState(1)
-  const [clientUserPageSize, setClientUserPageSize] = useState(10)
+  const [clientUserStatusFilter, setClientUserStatusFilter] = useState<string>('ALL')
   const sitesTableRef = useRef<HTMLDivElement | null>(null)
   const logoInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -196,6 +198,32 @@ export default function ClientDetailsPage() {
 
     setSelectedFacilityIds([facilityId])
     setLastSelectedFacilityIndex(rowIndex)
+  }
+
+  const onSelectClientAccessRow = (userId: string, rowIndex: number, options: { shift: boolean; multi: boolean }) => {
+    if (!data) return
+    if (options.shift && lastSelectedClientAccessIndex !== null) {
+      const start = Math.min(lastSelectedClientAccessIndex, rowIndex)
+      const end = Math.max(lastSelectedClientAccessIndex, rowIndex)
+      const rangeIds = data.clientAccessUsers.slice(start, end + 1).map((row) => row.user_id)
+
+      setSelectedClientAccessIds((prev) => {
+        if (options.multi) {
+          return Array.from(new Set([...prev, ...rangeIds]))
+        }
+        return rangeIds
+      })
+      return
+    }
+
+    if (options.multi) {
+      setSelectedClientAccessIds((prev) => (prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]))
+      setLastSelectedClientAccessIndex(rowIndex)
+      return
+    }
+
+    setSelectedClientAccessIds([userId])
+    setLastSelectedClientAccessIndex(rowIndex)
   }
 
   const openFacilityModal = (facility?: AdminFacilityRow) => {
@@ -299,12 +327,6 @@ export default function ClientDetailsPage() {
     }
   }
 
-  const openDeleteFacilityConfirm = (facility: AdminFacilityRow) => {
-    setDeleteTargetFacility(facility)
-    setDeleteFacilityConfirmInput('')
-    setIsDeleteFacilityConfirmOpen(true)
-  }
-
   const onToggleFacility = async (facility: AdminFacilityRow) => {
     try {
       await toggleFacilityMutation.mutateAsync({ facilityId: facility.id, isActive: !facility.is_active })
@@ -314,22 +336,14 @@ export default function ClientDetailsPage() {
     }
   }
 
-  const onConfirmDeleteFacility = async () => {
-    if (!deleteTargetFacility) return
-
-    if (deleteFacilityConfirmInput.trim() !== deleteTargetFacility.facility_code) {
-      toast.error('Type the exact Site ID to confirm deletion.')
-      return
-    }
-
+  const onBulkToggleFacility = async (isActive: boolean) => {
+    if (selectedFacilityIds.length === 0) return
     try {
-      await deleteFacilityMutation.mutateAsync({ facilityId: deleteTargetFacility.id })
-      toast.success('Site permanently deleted.')
-      setDeleteTargetFacility(null)
-      setDeleteFacilityConfirmInput('')
-      setIsDeleteFacilityConfirmOpen(false)
+      await Promise.all(selectedFacilityIds.map(id => toggleFacilityMutation.mutateAsync({ facilityId: id, isActive })))
+      toast.success(`Sites ${isActive ? 'enabled' : 'disabled'}.`)
+      setSelectedFacilityIds([])
     } catch (error) {
-      toast.error(toHumanErrorMessage(error, 'Unable to delete site.'))
+      toast.error(toHumanErrorMessage(error, `Unable to ${isActive ? 'enable' : 'disable'} sites.`))
     }
   }
 
@@ -372,12 +386,22 @@ export default function ClientDetailsPage() {
     }
   }
 
-  const onRevokeClientAccess = async (userId: string) => {
+  const onRevokeClientAccess = (userId: string) => {
+    setClientToRemove(userId)
+    setIsRemoveClientConfirmOpen(true)
+  }
+
+  const onConfirmRemoveClient = async () => {
     if (!data) return
+    const idsToRemove = clientToRemove ? [clientToRemove] : selectedClientAccessIds
+    if (idsToRemove.length === 0) return
 
     try {
-      await revokeCompanyClientAccessMutation.mutateAsync({ companyId: data.company.id, userId })
-      toast.success('Client access removed.')
+      await Promise.all(idsToRemove.map(id => revokeCompanyClientAccessMutation.mutateAsync({ companyId: data.company.id, userId: id })))
+      setSelectedClientAccessIds((prev) => prev.filter((id) => !idsToRemove.includes(id)))
+      setClientToRemove(null)
+      setIsRemoveClientConfirmOpen(false)
+      toast.success(`Removed access for ${idsToRemove.length} client${idsToRemove.length > 1 ? 's' : ''}.`)
     } catch (error) {
       toast.error(toHumanErrorMessage(error, 'Unable to remove client access.'))
     }
@@ -429,26 +453,15 @@ export default function ClientDetailsPage() {
     return users.filter((user) => {
       if (user.role_code !== 'CLIENT') return false
       if (clientAccessUserIds.has(user.id)) return false
-      if (clientUserCompanyFilter !== 'ALL' && user.company_id !== clientUserCompanyFilter) return false
-      if (clientUserFacilityFilter !== 'ALL' && user.facility_id !== clientUserFacilityFilter) return false
+      if (clientUserStatusFilter !== 'ALL') {
+        const wantActive = clientUserStatusFilter === 'ACTIVE'
+        if (user.is_active !== wantActive) return false
+      }
 
       if (!query) return true
-      return [user.user_id, user.full_name, user.email, user.phone ?? ''].join(' ').toLowerCase().includes(query)
+      return [user.user_id, user.full_name, user.phone ?? ''].join(' ').toLowerCase().includes(query)
     })
-  }, [clientAccessUserIds, clientUserCompanyFilter, clientUserFacilityFilter, clientUserSearch, users])
-
-  const clientUserFacilityOptions = useMemo(() => {
-    if (clientUserCompanyFilter === 'ALL') {
-      return [{ value: 'ALL', label: 'All sites' }]
-    }
-
-    return [
-      { value: 'ALL', label: 'All sites' },
-      ...facilities
-        .filter((facility) => facility.companyId === clientUserCompanyFilter)
-        .map((facility) => ({ value: facility.id, label: facility.label })),
-    ]
-  }, [clientUserCompanyFilter, facilities])
+  }, [clientAccessUserIds, clientUserStatusFilter, clientUserSearch, users])
 
   const userById = useMemo(() => {
     const map = new Map<string, (typeof users)[number]>()
@@ -476,21 +489,11 @@ export default function ClientDetailsPage() {
     return user.user_id
   }
 
-  const totalClientUserPages = Math.max(1, Math.ceil(candidateClientUsers.length / clientUserPageSize))
-  const pagedClientUsers = useMemo(() => {
-    const start = (clientUserPage - 1) * clientUserPageSize
-    return candidateClientUsers.slice(start, start + clientUserPageSize)
-  }, [candidateClientUsers, clientUserPage, clientUserPageSize])
+  const displayClientUsers = candidateClientUsers.slice(0, 5)
 
   useEffect(() => {
-    setClientUserPage(1)
-  }, [clientUserSearch, clientUserCompanyFilter, clientUserFacilityFilter, clientUserPageSize])
-
-  useEffect(() => {
-    if (clientUserPage > totalClientUserPages) {
-      setClientUserPage(totalClientUserPages)
-    }
-  }, [clientUserPage, totalClientUserPages])
+    setSelectedClientCandidateIds([])
+  }, [clientUserSearch, clientUserStatusFilter])
 
   return (
     <main className="space-y-6 p-6">
@@ -546,23 +549,8 @@ export default function ClientDetailsPage() {
                       </div>
                       
                       <div className="flex items-center gap-2">
-                        <TooltipIconButton tooltip="Edit Details" onClick={() => setIsEditCompanySidebarOpen(true)}>
+                        <TooltipIconButton tooltip="Edit Details" aria-label="Edit Details" onClick={() => setIsEditCompanySidebarOpen(true)}>
                           <Pencil className="h-4 w-4" />
-                        </TooltipIconButton>
-                        <TooltipIconButton 
-                          tooltip={data.company.is_active ? 'Deactivate' : 'Activate'} 
-                          onClick={() => void onToggleCompany()}
-                          disabled={toggleCompanyMutation.isPending}
-                          className={data.company.is_active ? 'hover:text-amber-600 hover:bg-amber-600/10' : 'hover:text-emerald-600 hover:bg-emerald-600/10'}
-                        >
-                          <PowerOff className="h-4 w-4" />
-                        </TooltipIconButton>
-                        <TooltipIconButton 
-                          tooltip="Delete Permanently" 
-                          onClick={() => { setDeleteCompanyConfirmInput(''); setIsDeleteCompanyConfirmOpen(true) }}
-                          className="hover:text-destructive hover:bg-destructive/10"
-                        >
-                          <Trash2 className="h-4 w-4" />
                         </TooltipIconButton>
                       </div>
                     </div>
@@ -664,39 +652,127 @@ export default function ClientDetailsPage() {
                   </CardHeader>
                   <CardContent>
                     {data.clientAccessUsers.length > 0 ? (
-                      <div className="overflow-x-auto rounded-md border border-border/70">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b bg-muted/40">
-                              <th className="w-40 p-3 text-left">User ID</th>
-                              <th className="p-3 text-left">Name</th>
-                              <th className="w-24 p-3 text-left">Status</th>
-                              <th className="w-16 p-3 text-left" aria-label="Actions" />
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {data.clientAccessUsers.map((user) => (
-                              <tr key={user.user_id} className="group border-b last:border-b-0 hover:bg-muted/20">
-                                <td className="p-3 text-muted-foreground">{getClientDisplayUserId(user)}</td>
-                                <td className="p-3">{getClientDisplayName(user)}</td>
-                                <td className="p-3">
-                                  {user.is_active ? (
-                                    <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">Active</span>
-                                  ) : (
-                                    <span className="inline-flex items-center rounded-full border border-rose-500/20 bg-rose-500/10 px-2 py-0.5 text-xs font-medium text-rose-600 dark:text-rose-400">Inactive</span>
-                                  )}
-                                </td>
-                                <td className="p-3">
-                                  <div className="flex justify-end opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
-                                    <TooltipIconButton className="h-8 w-8" tooltip="Remove client" onClick={() => void onRevokeClientAccess(user.user_id)}>
-                                      <UserMinus className="h-4 w-4" />
-                                    </TooltipIconButton>
-                                  </div>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                      <div className="space-y-3">
+                        {selectedClientAccessIds.length > 0 ? (
+                          <div className="flex items-center justify-between rounded-md border border-border/70 bg-muted/10 p-2.5">
+                            <span className="px-1 text-sm text-muted-foreground">{selectedClientAccessIds.length} selected</span>
+                            <div className="flex gap-1.5">
+                              <TooltipIconButton
+                                onClick={() => {
+                                  setSelectedClientAccessIds([])
+                                  setLastSelectedClientAccessIndex(null)
+                                }}
+                                tooltip="Clear selection"
+                                aria-label="Clear selection"
+                              >
+                                <X className="h-4 w-4" />
+                              </TooltipIconButton>
+                              <TooltipIconButton
+                                onClick={() => setIsRemoveClientConfirmOpen(true)}
+                                tooltip="Remove selected clients"
+                                aria-label="Remove selected clients"
+                                className="hover:text-amber-600 hover:bg-amber-600/10"
+                                disabled={revokeCompanyClientAccessMutation.isPending}
+                              >
+                                <UserMinus className="h-4 w-4" />
+                              </TooltipIconButton>
+                            </div>
+                          </div>
+                        ) : null}
+                        <div className="rounded-md border border-border/70">
+                          <Table className="table-fixed text-sm">
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead className="w-12 px-4 py-3 align-middle" aria-label="Select rows">
+                                  <button
+                                    type="button"
+                                    className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50"
+                                    onClick={() => {
+                                      const allSelected = data.clientAccessUsers.length > 0 && selectedClientAccessIds.length === data.clientAccessUsers.length
+                                      if (allSelected) {
+                                        setSelectedClientAccessIds([])
+                                        setLastSelectedClientAccessIndex(null)
+                                      } else {
+                                        setSelectedClientAccessIds(data.clientAccessUsers.map((u) => u.user_id))
+                                        setLastSelectedClientAccessIndex(0)
+                                      }
+                                    }}
+                                    aria-label="Select all"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      className="table-select-checkbox pointer-events-none"
+                                      checked={data.clientAccessUsers.length > 0 && selectedClientAccessIds.length === data.clientAccessUsers.length}
+                                      readOnly
+                                    />
+                                  </button>
+                                </TableHead>
+                                <TableHead className="w-32 px-4 py-3">User ID</TableHead>
+                                <TableHead className="w-[40%] px-4 py-3">Name</TableHead>
+                                <TableHead className="w-24 px-4 py-3">Status</TableHead>
+                                <TableHead className="w-20 px-4 py-3" aria-label="Actions" />
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {data.clientAccessUsers.map((user, rowIndex) => (
+                                <TableRow 
+                                  key={user.user_id} 
+                                  className="group cursor-pointer transition-colors"
+                                  data-state={selectedClientAccessIds.includes(user.user_id) ? 'selected' : undefined}
+                                  onClick={(event) => {
+                                    onSelectClientAccessRow(user.user_id, rowIndex, { 
+                                      shift: event.shiftKey, 
+                                      multi: event.ctrlKey || event.metaKey 
+                                    })
+                                  }}
+                                >
+                                  <TableCell className="w-12 px-4 py-3 align-middle" onClick={(e) => e.stopPropagation()}>
+                                    <div className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50">
+                                      <button
+                                        type="button"
+                                        className="flex h-8 w-8 items-center justify-center"
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          onSelectClientAccessRow(user.user_id, rowIndex, { shift: false, multi: true })
+                                        }}
+                                        aria-label={`Select client ${getClientDisplayUserId(user)}`}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          className="table-select-checkbox"
+                                          checked={selectedClientAccessIds.includes(user.user_id)}
+                                          onChange={() => onSelectClientAccessRow(user.user_id, rowIndex, { shift: false, multi: true })}
+                                          onClick={(e) => e.stopPropagation()}
+                                          aria-label={`Select client ${getClientDisplayUserId(user)}`}
+                                        />
+                                      </button>
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="w-32 px-4 py-3 text-sm font-medium text-muted-foreground">
+                                    <span className="block truncate">{getClientDisplayUserId(user)}</span>
+                                  </TableCell>
+                                  <TableCell className="w-[40%] px-4 py-3 text-sm font-medium">
+                                    <span className="block truncate">{getClientDisplayName(user)}</span>
+                                  </TableCell>
+                                  <TableCell className="w-24 px-4 py-3">
+                                    {user.is_active ? (
+                                      <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">Active</span>
+                                    ) : (
+                                      <span className="inline-flex items-center rounded-full border border-rose-500/20 bg-rose-500/10 px-2.5 py-0.5 text-[11px] font-medium text-rose-600 dark:text-rose-400">Inactive</span>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="w-20 px-4 py-3">
+                                    <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+                                      <TooltipIconButton className="h-8 w-8 hover:bg-destructive/10 hover:text-destructive" tooltip="Remove access" aria-label="Remove access" onClick={(e) => { e.stopPropagation(); onRevokeClientAccess(user.user_id); }}>
+                                        <UserMinus className="h-4 w-4" />
+                                      </TooltipIconButton>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
                       </div>
                     ) : (
                       <p className="text-sm text-muted-foreground">No clients added.</p>
@@ -717,54 +793,137 @@ export default function ClientDetailsPage() {
                   </Button>
                 </div>
 
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
-                  <Input value={facilitySearch} onChange={(event) => setFacilitySearch(event.target.value)} placeholder="Search sites" className="pl-9" />
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="relative flex-1 min-w-[280px]">
+                    <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
+                    <Input value={facilitySearch} onChange={(event) => setFacilitySearch(event.target.value)} placeholder="Search sites" className="pl-9 pr-10" />
+                    <div className="absolute right-2 top-1.5">
+                      <TooltipIconButton
+                        className="h-7 w-7 border-transparent"
+                        tooltip="Search by Site ID, Name, City, State, or Country."
+                        aria-label="Search help"
+                      >
+                        <CircleHelp className="h-4 w-4" />
+                      </TooltipIconButton>
+                    </div>
+                  </div>
                 </div>
 
-                <div ref={sitesTableRef} className="overflow-x-auto rounded-md border border-border/70">
-                  <table className="w-full table-fixed text-sm">
-                    <thead>
-                      <tr className="border-b bg-muted/40">
-                        <th className="w-36 p-3 text-left">
+                {selectedFacilityIds.length > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/70 bg-muted/10 p-2.5 mb-4">
+                    <span className="px-1 text-sm text-muted-foreground">{selectedFacilityIds.length} selected</span>
+                    <div className="flex items-center gap-1.5">
+                      <TooltipIconButton
+                        onClick={() => setSelectedFacilityIds([])}
+                        tooltip="Clear selection"
+                        aria-label="Clear selection"
+                      >
+                        <X className="h-4 w-4" />
+                      </TooltipIconButton>
+                      <TooltipIconButton
+                        onClick={() => void onBulkToggleFacility(true)}
+                        tooltip="Activate selected sites"
+                        aria-label="Activate selected sites"
+                        disabled={toggleFacilityMutation.isPending}
+                      >
+                        <Power className="h-4 w-4" />
+                      </TooltipIconButton>
+                      <TooltipIconButton
+                        onClick={() => void onBulkToggleFacility(false)}
+                        tooltip="Deactivate selected sites"
+                        aria-label="Deactivate selected sites"
+                        disabled={toggleFacilityMutation.isPending}
+                      >
+                        <PowerOff className="h-4 w-4" />
+                      </TooltipIconButton>
+                    </div>
+                  </div>
+                )}
+
+                <div ref={sitesTableRef} className="rounded-md border border-border/70">
+                  <Table className="table-fixed text-sm">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-12 px-4 py-3 align-middle" aria-label="Select rows">
+                          <button
+                            type="button"
+                            className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50"
+                            onClick={() => {
+                              const allSelected = pagedFacilities.length > 0 && selectedFacilityIds.length === pagedFacilities.length
+                              if (allSelected) {
+                                setSelectedFacilityIds([])
+                                setLastSelectedFacilityIndex(null)
+                              } else {
+                                setSelectedFacilityIds(pagedFacilities.map((f) => f.id))
+                                setLastSelectedFacilityIndex(0)
+                              }
+                            }}
+                            aria-label="Select all"
+                          >
+                            <input
+                              type="checkbox"
+                              className="table-select-checkbox pointer-events-none"
+                              checked={pagedFacilities.length > 0 && selectedFacilityIds.length === pagedFacilities.length}
+                              readOnly
+                            />
+                          </button>
+                        </TableHead>
+                        <TableHead className="w-32 px-4 py-3">
                           <button type="button" onClick={() => onFacilitySort('facility_code')} className={sortButtonClass(facilitySortKey === 'facility_code')}>
                             Site ID
                             {sortIcon(facilitySortKey === 'facility_code', facilitySortDirection)}
                           </button>
-                        </th>
-                        <th className="w-[28%] p-3 text-left">
+                        </TableHead>
+                        <TableHead className="w-[28%] px-4 py-3">
                           <button type="button" onClick={() => onFacilitySort('facility_name')} className={sortButtonClass(facilitySortKey === 'facility_name')}>
                             Name
                             {sortIcon(facilitySortKey === 'facility_name', facilitySortDirection)}
                           </button>
-                        </th>
-                        <th className="w-28 p-3 text-left">
+                        </TableHead>
+                        <TableHead className="w-24 px-4 py-3">
                           <button type="button" onClick={() => onFacilitySort('city')} className={sortButtonClass(facilitySortKey === 'city')}>
                             City
                             {sortIcon(facilitySortKey === 'city', facilitySortDirection)}
                           </button>
-                        </th>
-                        <th className="w-24 p-3 text-left">Status</th>
-                        <th className="w-44 p-3 text-left">
+                        </TableHead>
+                        <TableHead className="w-24 px-4 py-3">Status</TableHead>
+                        <TableHead className="w-44 px-4 py-3">
                           <button type="button" onClick={() => onFacilitySort('created_at')} className={sortButtonClass(facilitySortKey === 'created_at')}>
                             Created
                             {sortIcon(facilitySortKey === 'created_at', facilitySortDirection)}
                           </button>
-                        </th>
-                        <th className="w-44 p-3 text-left">
+                        </TableHead>
+                        <TableHead className="w-44 px-4 py-3">
                           <button type="button" onClick={() => onFacilitySort('updated_at')} className={sortButtonClass(facilitySortKey === 'updated_at')}>
                             Updated
                             {sortIcon(facilitySortKey === 'updated_at', facilitySortDirection)}
                           </button>
-                        </th>
-                        <th className="w-20 p-3 text-left" aria-label="Actions" />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {pagedFacilities.map((facility, rowIndex) => (
-                        <tr
+                        </TableHead>
+                        <TableHead className="w-20 px-4 py-3" aria-label="Actions" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {pagedFacilities.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                            No sites found.
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        pagedFacilities.map((facility, rowIndex) => (
+                        <TableRow
                           key={facility.id}
-                          className={`group border-b transition-colors ${selectedFacilityIds.includes(facility.id) ? 'bg-muted/25 ring-1 ring-inset ring-border/70' : 'hover:bg-muted/20'}`}
+                          data-state={selectedFacilityIds.includes(facility.id) ? 'selected' : undefined}
+                          className="group cursor-pointer transition-colors"
+                          onDoubleClick={() => navigate(`/admin/clients/${companyId}/facilities/${facility.id}`, {
+                            state: {
+                              from: `${location.pathname}${location.search}`,
+                              companyCode: data.company.company_code,
+                              facilityCode: facility.facility_code,
+                              companyName: data.company.company_name,
+                              facilityName: facility.facility_name,
+                            },
+                          })}
                           onClick={(event) => {
                             if (event.shiftKey || event.ctrlKey || event.metaKey) {
                               onSelectFacilityRow(facility.id, rowIndex, { shift: event.shiftKey, multi: event.ctrlKey || event.metaKey })
@@ -780,32 +939,53 @@ export default function ClientDetailsPage() {
                               },
                             })
                           }}
-                          onDoubleClick={() => navigate(`/admin/clients/${companyId}/facilities/${facility.id}`, {
-                            state: {
-                              from: `${location.pathname}${location.search}`,
-                              companyCode: data.company.company_code,
-                              facilityCode: facility.facility_code,
-                              companyName: data.company.company_name,
-                              facilityName: facility.facility_name,
-                            },
-                          })}
                         >
-                          <td className="w-36 p-3 text-sm">
+                          <TableCell className="w-12 px-4 py-3 align-middle">
+                            <div className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50">
+                              <button
+                                type="button"
+                                className="flex h-8 w-8 items-center justify-center"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  onSelectFacilityRow(facility.id, rowIndex, { shift: false, multi: true })
+                                }}
+                                aria-label={`Select site ${facility.facility_code}`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selectedFacilityIds.includes(facility.id)}
+                                  onChange={() => onSelectFacilityRow(facility.id, rowIndex, { shift: false, multi: true })}
+                                  onClick={(event) => event.stopPropagation()}
+                                  className="table-select-checkbox"
+                                  aria-label={`Select site ${facility.facility_code}`}
+                                />
+                              </button>
+                            </div>
+                          </TableCell>
+                          <TableCell className="w-32 px-4 py-3 text-sm font-medium">
                             <span className="block truncate">{facility.facility_code}</span>
-                          </td>
-                          <td className="w-[28%] p-3 text-sm" title={facility.facility_name}>
+                          </TableCell>
+                          <TableCell className="w-[28%] px-4 py-3 text-sm font-medium" title={facility.facility_name}>
                             <span className="block truncate">{facility.facility_name}</span>
-                          </td>
-                          <td className="w-28 p-3 text-sm text-muted-foreground">{facility.city}</td>
-                          <td className="w-24 p-3 text-sm">{facility.is_active ? 'Active' : 'Inactive'}</td>
-                          <td className="w-44 p-3 text-sm text-muted-foreground">
+                          </TableCell>
+                          <TableCell className="w-24 px-4 py-3 text-sm text-muted-foreground">
+                            <span className="block truncate">{facility.city}</span>
+                          </TableCell>
+                          <TableCell className="w-24 px-4 py-3">
+                            {facility.is_active ? (
+                              <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">Active</span>
+                            ) : (
+                              <span className="inline-flex items-center rounded-full border border-rose-500/20 bg-rose-500/10 px-2.5 py-0.5 text-[11px] font-medium text-rose-600 dark:text-rose-400">Inactive</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="w-44 px-4 py-3 text-[13px] text-muted-foreground">
                             <span className="block truncate">{new Date(facility.created_at).toLocaleString()}</span>
-                          </td>
-                          <td className="w-44 p-3 text-sm text-muted-foreground">
+                          </TableCell>
+                          <TableCell className="w-44 px-4 py-3 text-[13px] text-muted-foreground">
                             <span className="block truncate">{new Date(facility.updated_at).toLocaleString()}</span>
-                          </td>
-                          <td className="w-20 p-3">
-                            <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                          </TableCell>
+                          <TableCell className="w-20 px-4 py-3">
+                            <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
                               <TooltipIconButton
                                 onClick={(event) => {
                                   event.stopPropagation()
@@ -830,29 +1010,19 @@ export default function ClientDetailsPage() {
                                   event.stopPropagation()
                                   void onToggleFacility(facility)
                                 }}
-                                className="h-8 w-8"
+                                className="h-8 w-8 hover:bg-amber-600/10 hover:text-amber-600"
                                 tooltip={facility.is_active ? 'Deactivate site' : 'Activate site'}
                                 aria-label={facility.is_active ? 'Deactivate site' : 'Activate site'}
                               >
                                 {facility.is_active ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
                               </TooltipIconButton>
-                              <TooltipIconButton
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  openDeleteFacilityConfirm(facility)
-                                }}
-                                className="h-8 w-8 hover:text-destructive"
-                                tooltip="Delete site"
-                                aria-label="Delete site"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </TooltipIconButton>
                             </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                          </TableCell>
+                        </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -875,6 +1045,39 @@ export default function ClientDetailsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Danger Zone */}
+      {data ? (
+        <Card className="border-destructive/20 bg-destructive/5">
+          <CardHeader>
+            <CardTitle className="text-lg text-destructive">Danger Zone</CardTitle>
+            <CardDescription className="text-destructive/80">Manage access limits and permanent deletion for this account.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
+            <Button 
+              type="button" 
+              variant="outline" 
+              className="h-9 px-4 border-destructive/30 text-destructive hover:bg-destructive hover:text-destructive-foreground focus-visible:ring-destructive" 
+              onClick={() => void onToggleCompany()} 
+              disabled={toggleCompanyMutation.isPending}
+            >
+              {data.company.is_active ? 'Deactivate Account' : 'Activate Account'}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              className="h-9 px-4"
+              onClick={() => {
+                setDeleteCompanyConfirmInput('')
+                setIsDeleteCompanyConfirmOpen(true)
+              }}
+            >
+              Delete Permanently
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
 
       {isEditCompanySidebarOpen && data ? (
         <div className="fixed inset-0 z-[65] flex justify-end bg-black/35" onClick={() => setIsEditCompanySidebarOpen(false)}>
@@ -943,7 +1146,7 @@ export default function ClientDetailsPage() {
 
       {isAddClientUsersOpen ? (
         <div className="fixed inset-0 z-[66] flex items-center justify-center bg-black/45 p-4" onClick={() => setIsAddClientUsersOpen(false)}>
-          <Card className="max-h-[90vh] w-full max-w-4xl overflow-visible" onClick={(event) => event.stopPropagation()}>
+          <Card className="max-h-[90vh] w-full max-w-3xl overflow-visible" onClick={(event) => event.stopPropagation()}>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
                 <CardTitle>Add Clients</CardTitle>
@@ -952,102 +1155,148 @@ export default function ClientDetailsPage() {
                 <X className="h-4 w-4" />
               </Button>
             </CardHeader>
-            <CardContent className="max-h-[70vh] space-y-4 overflow-y-auto">
-              <div className="grid gap-3 md:grid-cols-3">
-                <div className="relative">
+            <CardContent className="space-y-4">
+              {/* Search & Status Filter */}
+              <div className="flex items-center gap-3">
+                <div className="relative flex-1">
                   <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                   <Input
                     value={clientUserSearch}
                     onChange={(event) => setClientUserSearch(event.target.value)}
-                    placeholder="Search by id, name, email"
-                    className="h-9 pl-9"
+                    placeholder="Search by name, ID, or phone"
+                    className="h-9 pl-9 pr-10"
                   />
+                  <div className="absolute right-2 top-1">
+                    <TooltipIconButton
+                      className="h-7 w-7 border-transparent"
+                      tooltip="Search by user ID, name, or phone number."
+                      aria-label="Search help"
+                    >
+                      <CircleHelp className="h-4 w-4" />
+                    </TooltipIconButton>
+                  </div>
                 </div>
                 <SearchableSelect
-                  value={clientUserCompanyFilter}
-                  onChange={(value) => {
-                    setClientUserCompanyFilter(value)
-                    setClientUserFacilityFilter('ALL')
-                  }}
-                  options={[{ value: 'ALL', label: 'All accounts' }, ...companies.map((company) => ({ value: company.id, label: company.label }))]}
-                  placeholder="All accounts"
-                />
-                <SearchableSelect
-                  value={clientUserFacilityFilter}
-                  onChange={(value) => setClientUserFacilityFilter(value)}
-                  options={clientUserFacilityOptions}
-                  placeholder="All sites"
+                  value={clientUserStatusFilter}
+                  onChange={(val) => setClientUserStatusFilter(val)}
+                  options={[
+                    { value: 'ALL', label: 'All Status' },
+                    { value: 'ACTIVE', label: 'Active' },
+                    { value: 'INACTIVE', label: 'Inactive' },
+                  ]}
+                  placeholder="All Status"
+                  className="w-[140px]"
                 />
               </div>
 
-              <div className="overflow-x-auto rounded-md border border-border/70">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b bg-muted/40">
-                      <th className="w-10 p-3 text-left" />
-                      <th className="w-32 p-3 text-left">User ID</th>
-                      <th className="w-[24%] p-3 text-left">Name</th>
-                      <th className="w-24 p-3 text-left">Status</th>
-                      <th className="p-3 text-left">Email</th>
-                      <th className="p-3 text-left">Account</th>
-                      <th className="p-3 text-left">Site</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pagedClientUsers.map((user) => (
-                      <tr
-                        key={user.id}
-                        className={`cursor-pointer border-b hover:bg-muted/20 ${selectedClientCandidateIds.includes(user.id) ? 'bg-muted/25' : ''}`}
-                        onClick={() => {
-                          setSelectedClientCandidateIds((prev) => (
-                            prev.includes(user.id)
-                              ? prev.filter((id) => id !== user.id)
-                              : [...prev, user.id]
-                          ))
-                        }}
-                      >
-                        <td className="p-3">
+              {/* Table */}
+              <div className="rounded-md border border-border/70">
+                <Table className="text-sm">
+                  <TableHeader>
+                    <TableRow className="bg-muted/40 hover:bg-muted/40">
+                      <TableHead className="w-12 px-4 py-3" aria-label="Select rows">
+                        <button
+                          type="button"
+                          className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50"
+                          onClick={() => {
+                            const allSelected = displayClientUsers.length > 0 && displayClientUsers.every((u) => selectedClientCandidateIds.includes(u.id))
+                            if (allSelected) {
+                              setSelectedClientCandidateIds([])
+                            } else {
+                              setSelectedClientCandidateIds(displayClientUsers.map((u) => u.id))
+                            }
+                          }}
+                          aria-label="Select all"
+                        >
                           <input
                             type="checkbox"
-                            checked={selectedClientCandidateIds.includes(user.id)}
-                            onClick={(event) => event.stopPropagation()}
-                            onChange={() => {
-                              setSelectedClientCandidateIds((prev) => (
-                                prev.includes(user.id)
-                                  ? prev.filter((id) => id !== user.id)
-                                  : [...prev, user.id]
-                              ))
-                            }}
                             className="table-select-checkbox"
+                            checked={displayClientUsers.length > 0 && displayClientUsers.every((u) => selectedClientCandidateIds.includes(u.id))}
+                            readOnly
+                            onClick={(e) => e.stopPropagation()}
                           />
-                        </td>
-                        <td className="p-3 text-muted-foreground">{user.user_id}</td>
-                        <td className="p-3">{user.full_name || user.email || user.user_id}</td>
-                        <td className="p-3 text-muted-foreground">{user.is_active ? 'Active' : 'Inactive'}</td>
-                        <td className="p-3 text-muted-foreground">{user.email}</td>
-                        <td className="p-3 text-muted-foreground">{companies.find((company) => company.id === user.company_id)?.label ?? '-'}</td>
-                        <td className="p-3 text-muted-foreground">{facilities.find((site) => site.id === user.facility_id)?.label ?? '-'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        </button>
+                      </TableHead>
+                      <TableHead className="w-[28%] px-4 py-3">User ID</TableHead>
+                      <TableHead className="w-[30%] px-4 py-3">Name</TableHead>
+                      <TableHead className="w-24 px-4 py-3">Status</TableHead>
+                      <TableHead className="px-4 py-3">Phone</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {displayClientUsers.length > 0 ? (
+                      displayClientUsers.map((user) => (
+                        <TableRow
+                          key={user.id}
+                          className="group cursor-pointer transition-colors"
+                          data-state={selectedClientCandidateIds.includes(user.id) ? 'selected' : undefined}
+                          onClick={() => {
+                            setSelectedClientCandidateIds((prev) => (
+                              prev.includes(user.id)
+                                ? prev.filter((id) => id !== user.id)
+                                : [...prev, user.id]
+                            ))
+                          }}
+                        >
+                          <TableCell className="w-12 px-4 py-3 align-middle">
+                            <button
+                              type="button"
+                              className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted/50"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setSelectedClientCandidateIds((prev) => (
+                                  prev.includes(user.id)
+                                    ? prev.filter((id) => id !== user.id)
+                                    : [...prev, user.id]
+                                ))
+                              }}
+                              aria-label={`Select user ${user.user_id}`}
+                            >
+                              <input
+                                type="checkbox"
+                                className="table-select-checkbox"
+                                checked={selectedClientCandidateIds.includes(user.id)}
+                                readOnly
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            </button>
+                          </TableCell>
+                          <TableCell className="w-[28%] px-4 py-3 text-sm font-medium">
+                            <span className="block truncate">{user.user_id}</span>
+                          </TableCell>
+                          <TableCell className="w-[30%] px-4 py-3 text-sm font-medium">
+                            <span className="block truncate">{user.full_name || user.email || user.user_id}</span>
+                          </TableCell>
+                          <TableCell className="w-24 px-4 py-3">
+                            {user.is_active ? (
+                              <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">Active</span>
+                            ) : (
+                              <span className="inline-flex items-center rounded-full border border-rose-500/20 bg-rose-500/10 px-2.5 py-0.5 text-[11px] font-medium text-rose-600 dark:text-rose-400">Inactive</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="px-4 py-3 text-sm text-muted-foreground">
+                            <span className="block truncate">{user.phone || '-'}</span>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow className="hover:bg-transparent">
+                        <TableCell colSpan={5} className="h-20 text-center text-muted-foreground">
+                          No clients available.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs text-muted-foreground">Showing {pagedClientUsers.length} of {candidateClientUsers.length}</p>
-                <div className="flex items-center gap-2">
-                  <PageSizeSelect value={clientUserPageSize} onChange={setClientUserPageSize} />
-                  <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setClientUserPage((prev) => Math.max(1, prev - 1))} disabled={clientUserPage <= 1}>
-                    Prev
-                  </Button>
-                  <span className="text-sm text-muted-foreground">{clientUserPage} / {totalClientUserPages}</span>
-                  <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setClientUserPage((prev) => Math.min(totalClientUserPages, prev + 1))} disabled={clientUserPage >= totalClientUserPages}>
-                    Next
-                  </Button>
-                </div>
-              </div>
+              {candidateClientUsers.length > 5 ? (
+                <p className="text-xs text-muted-foreground">Showing 5 of {candidateClientUsers.length} — refine your search to see more.</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Showing {displayClientUsers.length} of {candidateClientUsers.length}</p>
+              )}
 
-              <div className="flex justify-end gap-2">
+              <div className="flex justify-end gap-2 border-t border-border/50 pt-4">
                 <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setIsAddClientUsersOpen(false)}>
                   Cancel
                 </Button>
@@ -1057,7 +1306,7 @@ export default function ClientDetailsPage() {
                   onClick={() => void onGrantClientAccess()}
                   disabled={selectedClientCandidateIds.length === 0 || grantCompanyClientAccessMutation.isPending}
                 >
-                  {grantCompanyClientAccessMutation.isPending ? 'Adding...' : 'Add Clients'}
+                  {grantCompanyClientAccessMutation.isPending ? 'Adding...' : `Add ${selectedClientCandidateIds.length > 0 ? selectedClientCandidateIds.length : ''} Client${selectedClientCandidateIds.length !== 1 ? 's' : ''}`}
                 </Button>
               </div>
             </CardContent>
@@ -1114,33 +1363,28 @@ export default function ClientDetailsPage() {
         </div>
       ) : null}
 
-      {isDeleteFacilityConfirmOpen && deleteTargetFacility ? (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onClick={() => setIsDeleteFacilityConfirmOpen(false)}>
+      {isRemoveClientConfirmOpen ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onClick={() => setIsRemoveClientConfirmOpen(false)}>
           <Card className="w-full max-w-md" onClick={(event) => event.stopPropagation()}>
             <CardHeader>
-              <CardTitle>Confirm Permanent Delete</CardTitle>
-              <CardDescription>Type {deleteTargetFacility.facility_code} to permanently delete this site.</CardDescription>
+              <CardTitle>Remove Client Access</CardTitle>
+              <CardDescription>
+                Are you sure you want to remove access for {clientToRemove ? 'this client' : `${selectedClientAccessIds.length} selected clients`}?
+              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3">
-              <Input
-                value={deleteFacilityConfirmInput}
-                onChange={(event) => setDeleteFacilityConfirmInput(event.target.value)}
-                placeholder="Enter Site ID"
-              />
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setIsDeleteFacilityConfirmOpen(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  className="h-9 px-3"
-                  onClick={() => void onConfirmDeleteFacility()}
-                  disabled={deleteFacilityMutation.isPending || deleteFacilityConfirmInput.trim() !== deleteTargetFacility.facility_code}
-                >
-                  {deleteFacilityMutation.isPending ? 'Deleting...' : 'Delete Permanently'}
-                </Button>
-              </div>
+            <CardContent className="flex justify-end gap-2">
+              <Button type="button" variant="outline" className="h-9 px-3" onClick={() => setIsRemoveClientConfirmOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                className="h-9 px-3 focus:bg-destructive focus:text-destructive-foreground hover:bg-destructive/90 hover:text-destructive-foreground"
+                variant="destructive"
+                onClick={() => void onConfirmRemoveClient()}
+                disabled={revokeCompanyClientAccessMutation.isPending}
+              >
+                {revokeCompanyClientAccessMutation.isPending ? 'Removing...' : 'Remove'}
+              </Button>
             </CardContent>
           </Card>
         </div>
